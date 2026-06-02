@@ -225,9 +225,10 @@ def main():
     try:
         env = AerialBalanceEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
         if args_cli.video:
+            video_interval = int(max_iterations * env.max_episode_length // 5)
             video_kwargs = {
                 "video_folder": str(output_dir / "videos"),
-                "step_trigger": lambda step: step == 0,
+                "step_trigger": lambda step: step % video_interval == 0,
                 "video_length": env.max_episode_length - 1,
                 "disable_logger": True,
             }

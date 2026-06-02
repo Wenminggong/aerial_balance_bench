@@ -19,5 +19,5 @@ training:
     project: aerial_balance_bench
 
 logging:
-  root_dir: logs/rl
+  root_dir: logs/rl_train
   run_name: rpo_target_position_legacy8_train

@@ -83,7 +83,13 @@ class TargetPositionTask:
         """Return desired ball position and velocity for the current control step."""
         return self.goal_position, self.reference_velocity
 
-    def compute_reward(self, state: dict[str, torch.Tensor], command: dict[str, torch.Tensor], action: torch.Tensor):
+    def compute_reward(
+        self,
+        state: dict[str, torch.Tensor],
+        command: dict[str, torch.Tensor],
+        action: torch.Tensor,
+        terminated: torch.Tensor | None = None,
+    ):
         """Compute the target-position reward from the benchmark definition."""
         error = state["pb"] - self.goal_position
         ball_velocity = state["vb"]
@@ -97,9 +103,12 @@ class TargetPositionTask:
         control_reward = -self.cfg.command_weight * command_z.square()
         control_reward -= self.cfg.action_weight * action_z.square()
 
-        failure_mask = (torch.abs(theta) > state["theta_limit"]) | (
-            torch.abs(error) > self.cfg.max_error_for_failure
-        )
+        if terminated is None:
+            failure_mask = (torch.abs(theta) > state["theta_limit"]) | (
+                torch.abs(error) > self.cfg.max_error_for_failure
+            )
+        else:
+            failure_mask = terminated
         failure_reward = -self.cfg.failure_penalty * failure_mask.float()
 
         near_goal = torch.abs(error) < self.cfg.goal_radius

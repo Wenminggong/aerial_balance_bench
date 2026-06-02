@@ -249,10 +249,14 @@ class AerialBalanceEnv(DirectRLEnv):
         return {"policy": obs}
 
     def _get_rewards(self):
+        reward_kwargs = {}
+        if self.cfg.task_name == "target_position":
+            reward_kwargs["terminated"] = self.reset_terminated
         return self.task.compute_reward(
             self._state_dict(),
             self.control_interface.get_command_state(),
             self.control_interface.last_action,
+            **reward_kwargs,
         )
 
     def _get_dones(self):
