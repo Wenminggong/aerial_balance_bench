@@ -120,7 +120,10 @@ class VelocityModelStatePredictor:
                 "VelocityModelStatePredictor expects observation shape "
                 f"({self.num_envs}, 11), got {tuple(observation.shape)}."
             )
-        current_error = observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
+        current_error = (
+            observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
+            - observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
+        )
         if not self.active:
             self.predicted_observation.copy_(observation)
             self.predicted_error.copy_(current_error)
