@@ -71,6 +71,7 @@ class ThrustInterface:
         self.executed_force_z = torch.full((num_envs,), self.hover_force.item(), device=self.device)
         self.target_pitch = torch.zeros(num_envs, device=self.device)
         self.target_height_acc = torch.zeros(num_envs, device=self.device)
+        self.geometric_height_acc = torch.zeros(num_envs, device=self.device)
         self.beta = torch.zeros(num_envs, device=self.device)
         self.last_action = torch.zeros((num_envs, 1), device=self.device)
 
@@ -102,6 +103,7 @@ class ThrustInterface:
         self.executed_force_z[env_ids] = self.hover_force
         self.target_pitch[env_ids] = 0.0
         self.target_height_acc[env_ids] = 0.0
+        self.geometric_height_acc[env_ids] = 0.0
         self.beta[env_ids] = 0.0
         self.last_action[env_ids] = 0.0
 
@@ -145,14 +147,19 @@ class ThrustInterface:
         theta = env.theta
         omega = env.omega
         alpha = env.alpha
-        self.beta, self.target_height_acc = self._compute_geometric_vertical_acceleration(
+        self.beta, self.geometric_height_acc = self._compute_geometric_vertical_acceleration(
             theta,
             omega,
             alpha,
             beam_length=env.cfg.plank_length,
             rope_length=getattr(env.cfg, "rope_length", self.cfg.rope_length),
         )
-        self.target_pitch = self._compute_target_pitch(self.executed_force_z, self.beta, self.target_height_acc)
+        self.target_pitch = self._compute_target_pitch(
+            self.executed_force_z,
+            self.beta,
+            self.geometric_height_acc,
+        )
+        self.target_height_acc = self.executed_force_z / self.mass - self.gravity_z
 
         drone_state_w = env.drone_rope_plank.data.body_state_w[:, env.drone_body_ids[0]]
         target_roll = torch.zeros(self.num_envs, device=self.device)
@@ -185,6 +192,7 @@ class ThrustInterface:
             "hover_force": self.hover_force.repeat(self.num_envs),
             "target_pitch": self.target_pitch,
             "target_height_acc": self.target_height_acc,
+            "geometric_height_acc": self.geometric_height_acc,
             "beta": self.beta,
             "last_action": self.last_action,
         }
@@ -201,14 +209,14 @@ class ThrustInterface:
         self,
         force_z: torch.Tensor,
         beta: torch.Tensor,
-        target_height_acc: torch.Tensor,
+        geometric_height_acc: torch.Tensor,
     ) -> torch.Tensor:
         denominator = torch.where(
             force_z.abs() < self.cfg.eps,
             torch.full_like(force_z, self.cfg.eps),
             force_z,
         )
-        tan_pitch = ((force_z - self.mass * (target_height_acc + self.gravity_z)) * torch.tan(beta)) / denominator
+        tan_pitch = ((force_z - self.mass * (geometric_height_acc + self.gravity_z)) * torch.tan(beta)) / denominator
         pitch = torch.atan(tan_pitch)
         return torch.clamp(pitch, -self.cfg.max_pitch, self.cfg.max_pitch)
 
@@ -234,11 +242,11 @@ class ThrustInterface:
         beta_dot = sin_beta_dot / cos_beta
         beta_ddot = sin_beta_ddot / cos_beta + sin_beta * sin_beta_dot.square() / cos_beta.pow(3)
 
-        vertical_acc = -rope_length_t * (
+        geometric_height_acc = -rope_length_t * (
             torch.cos(beta) * beta_dot.square() + torch.sin(beta) * beta_ddot
         )
-        vertical_acc += beam_length_t * (torch.sin(theta) * omega.square() - torch.cos(theta) * alpha)
-        return beta, vertical_acc
+        geometric_height_acc += beam_length_t * (torch.sin(theta) * omega.square() - torch.cos(theta) * alpha)
+        return beta, geometric_height_acc
 
     def _forces_and_torques_from_throttle(self, throttle_cmds: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         thrusts, moments, _ = self.rotor_model(throttle_cmds)
