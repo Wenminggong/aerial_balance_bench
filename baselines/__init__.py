@@ -1,6 +1,12 @@
 """Baseline policies for Aerial-Balance-Bench."""
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
+from .cpid_acceleration_policy import (
+    AccelerationAnglePIDCfg,
+    AccelerationCPIDPolicy,
+    AccelerationCPIDPolicyCfg,
+    AccelerationPIDCfg,
+)
 from .cpid_policy import AnglePIDCfg, CPIDPolicy, CPIDPolicyCfg, VelocityPIDCfg
 from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
 from .nmpc_policy import NMPCPolicy, NMPCPolicyCfg
@@ -9,6 +15,10 @@ from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCf
 from .rl_policy import RLPolicy, RLPolicyCfg
 
 __all__ = [
+    "AccelerationAnglePIDCfg",
+    "AccelerationCPIDPolicy",
+    "AccelerationCPIDPolicyCfg",
+    "AccelerationPIDCfg",
     "AnglePIDCfg",
     "BasePolicy",
     "BasePolicyCfg",

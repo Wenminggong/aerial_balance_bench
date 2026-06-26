@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate an RL baseline against AerialBalanceEnv and log rollout data."""
+"""Run the acceleration-interface CPID baseline and log rollout data."""
 
 from __future__ import annotations
 
@@ -23,22 +23,63 @@ if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
 
-DEFAULT_RUN_CONFIG = PROJECT_ROOT / "baselines" / "configs" / "rl_target_position_rpo_eval.yaml"
-DEFAULT_ENV_CONFIG = PROJECT_ROOT / "environments" / "configs" / "zero_action.yaml"
-DEFAULT_POLICY_CONFIG = PROJECT_ROOT / "baselines" / "configs" / "rl_rpo.yaml"
+DEFAULT_RUN_CONFIG = PROJECT_ROOT / "baselines" / "configs" / "cpid_target_position_acceleration_eval_delay_free.yaml"
+DEFAULT_ENV_CONFIG = PROJECT_ROOT / "environments" / "configs" / "template_eval_acceleration_delay_free.yaml"
+DEFAULT_POLICY_CONFIG = PROJECT_ROOT / "baselines" / "configs" / "cpid_acceleration.yaml"
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate an RL baseline for Aerial-Balance-Bench.")
-    parser.add_argument("--config", type=str, default=str(DEFAULT_RUN_CONFIG), help="Path to an RL eval run YAML.")
+    parser = argparse.ArgumentParser(description="Acceleration CPID baseline runner for Aerial-Balance-Bench.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(DEFAULT_RUN_CONFIG),
+        help="Path to an acceleration CPID run YAML config.",
+    )
     parser.add_argument("--env_config", type=str, default=None, help="Override environment YAML config path.")
-    parser.add_argument("--policy_config", type=str, default=None, help="Override RL policy YAML config path.")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Override checkpoint path.")
+    parser.add_argument("--policy_config", type=str, default=None, help="Override acceleration CPID policy YAML config path.")
     parser.add_argument("--episodes", type=int, default=None, help="Override target completed episodes.")
     parser.add_argument("--num_envs", type=int, default=None, help="Override number of parallel environments.")
     parser.add_argument("--seed", type=int, default=None, help="Override random seed. Use -1 for a random seed.")
     parser.add_argument("--run_name", type=str, default=None, help="Override log run name.")
+    parser.add_argument("--log_root", type=str, default=None, help="Override log root directory.")
     parser.add_argument("--video", action="store_true", default=False, help="Record rollout video.")
+    parser.add_argument("--no_save_rollout", action="store_true", default=False, help="Skip rollout NPZ logging.")
+    parser.add_argument(
+        "--action_delay_enabled",
+        action="store_true",
+        default=None,
+        help="Enable command-level action delay. Passing --delay_step > 0 also enables it.",
+    )
+    parser.add_argument("--delay_step", type=int, default=None, help="Override command-level action delay steps.")
+    parser.add_argument(
+        "--external_disturbance_enabled",
+        action="store_true",
+        default=None,
+        help="Enable OU-process external disturbance.",
+    )
+    parser.add_argument(
+        "--external_disturbance_ou_clip",
+        type=float,
+        default=None,
+        help="Override the OU external-disturbance velocity clip.",
+    )
+    parser.add_argument("--angle_kp", type=float, default=None, help="Override outer angle PID Kp.")
+    parser.add_argument("--angle_ti", type=float, default=None, help="Override outer angle PID Ti.")
+    parser.add_argument("--angle_td", type=float, default=None, help="Override outer angle PID Td.")
+    parser.add_argument("--max_theta_change", type=float, default=None, help="Override per-step theta reference limit.")
+    parser.add_argument("--max_theta_ref", type=float, default=None, help="Override absolute theta reference limit.")
+    parser.add_argument("--acc_kp", type=float, default=None, help="Override inner acceleration PID Kp.")
+    parser.add_argument("--acc_ti", type=float, default=None, help="Override inner acceleration PID Ti.")
+    parser.add_argument("--acc_td", type=float, default=None, help="Override inner acceleration PID Td.")
+    parser.add_argument(
+        "--max_delta_acc",
+        type=float,
+        default=None,
+        help="Override both policy and acceleration-interface acceleration increment limit.",
+    )
+    parser.add_argument("--max_acc", type=float, default=None, help="Override acceleration command limit.")
+    parser.add_argument("--action_sign", type=float, default=None, help="Override acceleration action sign.")
     AppLauncher.add_app_launcher_args(parser)
     args_cli = parser.parse_args()
     if args_cli.video:
@@ -61,9 +102,11 @@ def _read_yaml_safely(path: str | Path) -> dict[str, Any]:
 def _resolve_config_path(path: str | Path | None, base_dir: Path, default_path: Path) -> Path:
     if path is None:
         return default_path.resolve()
+
     raw_path = Path(path).expanduser()
     if raw_path.is_absolute():
         return raw_path.resolve()
+
     for root in (PROJECT_ROOT, base_dir):
         candidate = (root / raw_path).resolve()
         if candidate.exists():
@@ -93,10 +136,10 @@ import torch
 
 try:
     from tqdm import tqdm
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover - tqdm is optional for this smoke runner.
     tqdm = None
 
-from aerial_balance_bench.baselines import RLPolicy, RLPolicyCfg
+from aerial_balance_bench.baselines import AccelerationCPIDPolicy, AccelerationCPIDPolicyCfg
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
 
@@ -125,15 +168,48 @@ STEP_EXTRA_FIELDS = (
     "executed_arz_cmd",
     "vrz_cmd",
     "executed_vrz_cmd",
+    "drz_cmd",
+    "executed_drz_cmd",
+    "target_position_z",
+    "frz_cmd",
+    "executed_frz_cmd",
+    "delta_frz_cmd",
+    "hover_force",
+    "target_pitch",
+    "target_height_acc",
+    "beta",
     "ball_mass",
     "low_level_controller_gain",
+    "position_gain",
     "velocity_gain",
+    "attitude_gain",
     "action_delay_enabled",
     "delay_step",
     "delayed_command_z",
     "external_disturbance_enabled",
     "external_disturbance_vel_z",
+    "external_disturbance_ou_theta",
+    "external_disturbance_ou_sigma",
     "last_action",
+    "trajectory_type_id",
+    "trajectory_amplitude",
+    "trajectory_period",
+)
+
+POLICY_EXTRA_FIELDS = (
+    "policy_raw_error",
+    "policy_error",
+    "policy_error_dot",
+    "policy_error_ddot",
+    "policy_theta_ref",
+    "policy_error_theta",
+    "policy_error_theta_dot",
+    "policy_error_theta_ddot",
+    "policy_delta_theta",
+    "policy_raw_delta_arz",
+    "policy_delta_arz",
+    "policy_arz_cmd",
+    "policy_acceleration_saturated",
 )
 
 
@@ -160,6 +236,7 @@ def _resolve_seed(run_config: dict[str, Any], env_config: dict[str, Any]) -> int
 
 def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
     env_cfg = AerialBalanceEnvCfg()
+
     env_values = config.get("env", {})
     env_cfg.seed = seed
     env_cfg.task_name = config.get("task_name", env_values.get("task_name", env_cfg.task_name))
@@ -183,88 +260,104 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
     if "rope_length" in env_values:
         env_cfg.rope_length = float(env_values["rope_length"])
 
-    _maybe_set_attrs(env_cfg.target_position_task, config.get("target_position_task", config.get("task", {})))
+    target_position_task_cfg = config.get("target_position_task", config.get("task", {}))
+    _maybe_set_attrs(env_cfg.target_position_task, target_position_task_cfg)
     _maybe_set_attrs(env_cfg.trajectory_tracking_task, config.get("trajectory_tracking_task", {}))
     _maybe_set_attrs(env_cfg.acceleration_interface, config.get("acceleration_interface", {}))
     _maybe_set_attrs(env_cfg.velocity_interface, config.get("velocity_interface", {}))
     _maybe_set_attrs(env_cfg.position_interface, config.get("position_interface", {}))
     _maybe_set_attrs(env_cfg.thrust_interface, config.get("thrust_interface", {}))
     _maybe_set_attrs(env_cfg.robustness, config.get("robustness", {}))
-    _maybe_set_attrs(env_cfg.target_position_evaluator, config.get("target_position_evaluator", config.get("evaluator", {})))
+
+    target_position_evaluator_cfg = config.get("target_position_evaluator", config.get("evaluator", {}))
+    _maybe_set_attrs(env_cfg.target_position_evaluator, target_position_evaluator_cfg)
     _maybe_set_attrs(env_cfg.trajectory_tracking_evaluator, config.get("trajectory_tracking_evaluator", {}))
     env_cfg.target_position_evaluator.episode_length_s = env_cfg.episode_length_s
     env_cfg.trajectory_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
+
     return env_cfg
 
 
 def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
     if env_cfg.task_name != "target_position":
-        raise ValueError("RLPolicy runner currently supports only task_name='target_position'.")
-    if env_cfg.interface_name != "velocity":
-        raise ValueError("RLPolicy runner currently supports only interface_name='velocity'.")
+        raise ValueError("AccelerationCPIDPolicy runner supports only task_name='target_position'.")
+    if env_cfg.interface_name != "acceleration":
+        raise ValueError("AccelerationCPIDPolicy runner supports only interface_name='acceleration'.")
 
 
-def _resolve_predictor_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg, step_dt: float):
-    predictor_cfg = policy_cfg.state_predictor
-    if _is_auto(predictor_cfg.delay_step):
-        if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
-            predictor_cfg.delay_step = int(env_cfg.robustness.delay_step)
-        else:
-            predictor_cfg.delay_step = 0
-    if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
-        predictor_cfg.step_dt = float(step_dt)
-    if _is_auto(predictor_cfg.max_acc):
-        predictor_cfg.max_acc = float(env_cfg.velocity_interface.max_acc)
-    if _is_auto(predictor_cfg.max_velocity):
-        predictor_cfg.max_velocity = float(env_cfg.velocity_interface.max_velocity)
-    if _is_auto(predictor_cfg.plank_length):
-        predictor_cfg.plank_length = float(env_cfg.plank_length)
-    if _is_auto(predictor_cfg.rope_length):
-        predictor_cfg.rope_length = float(env_cfg.rope_length)
-    if _is_auto(predictor_cfg.gravity):
-        predictor_cfg.gravity = float(abs(env_cfg.sim.gravity[-1]))
-    if _is_auto(predictor_cfg.ball_radius):
-        predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
-    if _is_auto(predictor_cfg.ball_mass):
-        predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+def _apply_cli_overrides(env_cfg: AerialBalanceEnvCfg, policy_cfg: AccelerationCPIDPolicyCfg):
+    robustness_override_requested = False
+
+    if args_cli.delay_step is not None:
+        env_cfg.robustness.delay_step = int(args_cli.delay_step)
+        env_cfg.robustness.action_delay_enabled = int(args_cli.delay_step) > 0
+        robustness_override_requested = True
+    if args_cli.action_delay_enabled is not None:
+        env_cfg.robustness.action_delay_enabled = bool(args_cli.action_delay_enabled)
+        robustness_override_requested = True
+    if args_cli.external_disturbance_enabled is not None:
+        env_cfg.robustness.external_disturbance_enabled = bool(args_cli.external_disturbance_enabled)
+        robustness_override_requested = True
+    if args_cli.external_disturbance_ou_clip is not None:
+        env_cfg.robustness.external_disturbance_ou_clip = float(args_cli.external_disturbance_ou_clip)
+        robustness_override_requested = True
+    if robustness_override_requested:
+        env_cfg.robustness.enabled = bool(
+            env_cfg.robustness.ball_mass_variation_enabled
+            or env_cfg.robustness.controller_gain_variation_enabled
+            or (env_cfg.robustness.action_delay_enabled and int(env_cfg.robustness.delay_step) > 0)
+            or env_cfg.robustness.external_disturbance_enabled
+        )
+
+    angle_cfg = policy_cfg.angle_pid
+    acc_cfg = policy_cfg.acceleration_pid
+    for cli_name, target, attr in (
+        ("angle_kp", angle_cfg, "kp"),
+        ("angle_ti", angle_cfg, "ti"),
+        ("angle_td", angle_cfg, "td"),
+        ("max_theta_change", angle_cfg, "max_theta_change"),
+        ("max_theta_ref", angle_cfg, "max_theta_ref"),
+        ("acc_kp", acc_cfg, "kp"),
+        ("acc_ti", acc_cfg, "ti"),
+        ("acc_td", acc_cfg, "td"),
+        ("action_sign", acc_cfg, "action_sign"),
+    ):
+        value = getattr(args_cli, cli_name)
+        if value is not None:
+            setattr(target, attr, float(value))
+
+    if args_cli.max_delta_acc is not None:
+        env_cfg.acceleration_interface.max_delta_acc = float(args_cli.max_delta_acc)
+        acc_cfg.max_delta_acc = float(args_cli.max_delta_acc)
+    if args_cli.max_acc is not None:
+        env_cfg.acceleration_interface.max_acc = float(args_cli.max_acc)
+        acc_cfg.max_acc = float(args_cli.max_acc)
+
+
+def _resolve_policy_limits_from_env(policy_cfg: AccelerationCPIDPolicyCfg, env_cfg: AerialBalanceEnvCfg):
+    acc_cfg = policy_cfg.acceleration_pid
+    if _is_auto(acc_cfg.max_delta_acc):
+        acc_cfg.max_delta_acc = float(env_cfg.acceleration_interface.max_delta_acc)
+    if _is_auto(acc_cfg.max_acc):
+        acc_cfg.max_acc = float(env_cfg.acceleration_interface.max_acc)
 
 
 def _is_auto(value) -> bool:
     return isinstance(value, str) and value.lower() == "auto"
 
 
-def _deep_update(target: dict, values: dict):
-    for key, value in values.items():
-        if isinstance(value, dict) and isinstance(target.get(key), dict):
-            _deep_update(target[key], value)
-        else:
-            target[key] = value
-
-
-def _resolve_checkpoint_path(path: str | Path | None, run_config: dict[str, Any], policy_config_dir: Path) -> str | None:
-    raw = args_cli.checkpoint or run_config.get("checkpoint_path") or path
-    if raw in (None, "", "null"):
-        return None
-    raw_path = Path(raw).expanduser()
-    if raw_path.is_absolute():
-        return str(raw_path.resolve())
-    for root in (PROJECT_ROOT, policy_config_dir):
-        candidate = (root / raw_path).resolve()
-        if candidate.exists():
-            return str(candidate)
-    return str((PROJECT_ROOT / raw_path).resolve())
-
-
 def _make_output_dir(run_config: dict[str, Any], seed: int, target_episodes: int) -> Path:
     logging_cfg = run_config.get("logging", {})
-    root_dir = ensure_dir(PROJECT_ROOT / logging_cfg.get("root_dir", "logs/rl"))
+    root_dir = ensure_dir(PROJECT_ROOT / (args_cli.log_root or logging_cfg.get("root_dir", "logs/cpid_acceleration")))
+
     if args_cli.run_name is not None:
         run_name = args_cli.run_name
     else:
         run_name = logging_cfg.get("run_name")
         if not run_name:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_name = f"rl_eval_ep_{target_episodes}_seed_{seed}_{timestamp}"
+            run_name = f"cpid_acceleration_ep_{target_episodes}_seed_{seed}_{timestamp}"
+
     return ensure_dir(root_dir / run_name)
 
 
@@ -282,10 +375,10 @@ def _scalar_metric(value: Any) -> float | bool:
     return value
 
 
-def _collect_tensor_fields(source: dict[str, Any], field_names: tuple[str, ...] | None = None) -> dict[str, np.ndarray]:
+def _collect_tensor_fields(source: dict[str, Any], field_names: tuple[str, ...]) -> dict[str, np.ndarray]:
     collected = {}
-    items = source.items() if field_names is None else ((key, source.get(key)) for key in field_names)
-    for key, value in items:
+    for key in field_names:
+        value = source.get(key)
         if isinstance(value, torch.Tensor):
             collected[key] = _tensor_to_numpy(value)
     return collected
@@ -293,6 +386,10 @@ def _collect_tensor_fields(source: dict[str, Any], field_names: tuple[str, ...] 
 
 def _collect_step_extras(infos: dict[str, Any]) -> dict[str, np.ndarray]:
     return _collect_tensor_fields(infos.get("step", {}), STEP_EXTRA_FIELDS)
+
+
+def _collect_policy_extras(policy: AccelerationCPIDPolicy) -> dict[str, np.ndarray]:
+    return _collect_tensor_fields(policy.get_state(), POLICY_EXTRA_FIELDS)
 
 
 def _collect_benchmark_metrics(infos: dict[str, Any]) -> dict[str, float | bool]:
@@ -321,10 +418,6 @@ def main():
     )
     env_config = _load_yaml(env_config_path)
     policy_config = _load_yaml(policy_config_path)
-    effective_policy_config = dict(policy_config)
-    _deep_update(effective_policy_config, run_config.get("policy_overrides", {}))
-    policy_cfg = RLPolicyCfg.from_dict(effective_policy_config)
-    policy_cfg.checkpoint_path = _resolve_checkpoint_path(policy_cfg.checkpoint_path, run_config, policy_config_path.parent)
 
     seed = _resolve_seed(run_config, env_config)
     random.seed(seed)
@@ -332,7 +425,11 @@ def main():
     torch.manual_seed(seed)
 
     env_cfg = _build_env_cfg(env_config, seed)
+    policy_cfg = AccelerationCPIDPolicyCfg.from_dict(policy_config)
+    _apply_cli_overrides(env_cfg, policy_cfg)
     _validate_env_cfg(env_cfg)
+    _resolve_policy_limits_from_env(policy_cfg, env_cfg)
+
     runner_cfg = run_config.get("runner", {})
     target_episodes = int(args_cli.episodes if args_cli.episodes is not None else runner_cfg.get("target_episodes", 1))
     target_episodes = max(target_episodes, 1)
@@ -357,9 +454,7 @@ def main():
             env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
         base_env = env.unwrapped
-        physical_action_limit = float(base_env.action_space.high[0])
-        _resolve_predictor_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
-        policy = RLPolicy(policy_cfg, base_env.num_envs, base_env.device, base_env.step_dt, physical_action_limit)
+        policy = AccelerationCPIDPolicy(policy_cfg, base_env.num_envs, base_env.device, base_env.step_dt)
         num_envs = base_env.num_envs
 
         save_yaml(
@@ -369,91 +464,120 @@ def main():
                 "episode_length_s": env_cfg.episode_length_s,
                 "task_name": env_cfg.task_name,
                 "interface_name": env_cfg.interface_name,
-                "algorithm": policy_cfg.algorithm,
-                "observation_mode": policy_cfg.observation_mode,
-                "policy_input_fields": list(policy.observation_adapter.field_names),
-                "physical_action_limit": physical_action_limit,
-                "checkpoint_path": policy_cfg.checkpoint_path,
-                "state_predictor_enabled": policy_cfg.state_predictor.enabled,
-                "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
+                "target_episodes": target_episodes,
+                "sim_device": env_cfg.sim.device,
                 "run_config_path": str(run_config_path),
                 "env_config_path": str(env_config_path),
                 "policy_config_path": str(policy_config_path),
+                "policy_name": policy_cfg.name,
+                "policy_step_dt": base_env.step_dt,
+                "angle_pid": vars(policy_cfg.angle_pid),
+                "acceleration_pid": vars(policy_cfg.acceleration_pid),
+                "robustness": {
+                    "enabled": bool(env_cfg.robustness.enabled),
+                    "action_delay_enabled": bool(env_cfg.robustness.action_delay_enabled),
+                    "delay_step": int(env_cfg.robustness.delay_step),
+                    "external_disturbance_enabled": bool(env_cfg.robustness.external_disturbance_enabled),
+                    "external_disturbance_ou_clip": float(env_cfg.robustness.external_disturbance_ou_clip),
+                },
+                "observation_fields": OBSERVATION_FIELDS,
             },
             output_dir / "resolved_run.yaml",
         )
 
         observations, infos = env.reset()
         policy.reset()
+
         configured_max_steps = runner_cfg.get("max_steps")
         if configured_max_steps is None:
             max_steps = math.ceil(target_episodes / num_envs) * base_env.max_episode_length
         else:
             max_steps = int(configured_max_steps)
 
+        save_rollout_enabled = bool(runner_cfg.get("save_rollout", True)) and not args_cli.no_save_rollout
         obs_records: list[np.ndarray] = []
         action_records: list[np.ndarray] = []
-        normalized_action_records: list[np.ndarray] = []
         reward_records: list[np.ndarray] = []
         terminated_records: list[np.ndarray] = []
         truncated_records: list[np.ndarray] = []
         policy_compute_time_records: list[float] = []
         benchmark_records: list[dict[str, float | bool]] = []
         step_extra_records: dict[str, list[np.ndarray]] = {key: [] for key in STEP_EXTRA_FIELDS}
-        policy_extra_records: dict[str, list[np.ndarray]] = {}
+        policy_extra_records: dict[str, list[np.ndarray]] = {key: [] for key in POLICY_EXTRA_FIELDS}
+        reward_sum = 0.0
+        reward_count = 0
 
         iterator = range(max_steps)
         if tqdm is not None:
-            iterator = tqdm(iterator, desc="RL rollout")
+            iterator = tqdm(iterator, desc="Acceleration CPID rollout")
 
         final_metrics = _collect_benchmark_metrics(infos)
         for _ in iterator:
-            obs_records.append(_tensor_to_numpy(observations["policy"]))
+            if save_rollout_enabled:
+                obs_records.append(_tensor_to_numpy(observations["policy"]))
+
             start_time = time.perf_counter()
+            # CPID is stateful. Use no_grad instead of inference_mode so its
+            # internal buffers remain normal mutable tensors across resets.
             with torch.no_grad():
                 actions = policy.act(observations, infos)
-            policy_compute_time_records.append(time.perf_counter() - start_time)
-            policy_extras = _collect_tensor_fields(policy.get_state())
+            policy_compute_time = time.perf_counter() - start_time
+            if save_rollout_enabled:
+                policy_extras = _collect_policy_extras(policy)
 
             next_observations, reward, terminated, truncated, infos = env.step(actions)
-            action_records.append(_tensor_to_numpy(actions))
-            normalized_action_records.append(_tensor_to_numpy(policy.normalized_action))
-            reward_records.append(_tensor_to_numpy(reward))
-            terminated_records.append(_tensor_to_numpy(terminated))
-            truncated_records.append(_tensor_to_numpy(truncated))
 
-            for key, value in _collect_step_extras(infos).items():
-                step_extra_records[key].append(value)
-            for key, value in policy_extras.items():
-                policy_extra_records.setdefault(key, []).append(value)
+            reward_sum += float(reward.detach().sum().cpu().item())
+            reward_count += int(reward.numel())
+            policy_compute_time_records.append(policy_compute_time)
+
+            if save_rollout_enabled:
+                action_records.append(_tensor_to_numpy(actions))
+                reward_records.append(_tensor_to_numpy(reward))
+                terminated_records.append(_tensor_to_numpy(terminated))
+                truncated_records.append(_tensor_to_numpy(truncated))
+
+                step_extras = _collect_step_extras(infos)
+                for key, value in step_extras.items():
+                    step_extra_records[key].append(value)
+                for key, value in policy_extras.items():
+                    policy_extra_records[key].append(value)
 
             final_metrics = _collect_benchmark_metrics(infos)
-            benchmark_records.append(final_metrics)
+            if save_rollout_enabled:
+                benchmark_records.append(final_metrics)
+
             done_env_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
             if done_env_ids.numel() > 0:
                 policy.reset(done_env_ids)
+
             observations = next_observations
 
             if bool(runner_cfg.get("render", True)) and not args_cli.headless:
                 env.render()
 
-            if int(final_metrics.get("completed_episodes", 0)) >= target_episodes:
+            completed_episodes = int(final_metrics.get("completed_episodes", 0))
+            if completed_episodes >= target_episodes:
                 break
 
-        rollout_steps = len(obs_records)
-        observations_np = _stack_or_empty(obs_records, (0, num_envs, len(OBSERVATION_FIELDS)))
-        rewards_np = _stack_or_empty(reward_records, (0, num_envs))
-        if bool(runner_cfg.get("save_rollout", True)):
+        if save_rollout_enabled:
+            rollout_steps = len(obs_records)
+            observations_np = _stack_or_empty(obs_records, (0, num_envs, len(OBSERVATION_FIELDS)))
+            rewards_np = _stack_or_empty(reward_records, (0, num_envs))
+        else:
+            rollout_steps = int(final_metrics.get("rollout_steps", 0)) or len(policy_compute_time_records)
+            observations_np = np.empty((0, num_envs, len(OBSERVATION_FIELDS)), dtype=np.float32)
+            rewards_np = np.empty((0, num_envs), dtype=np.float32)
+
+        if save_rollout_enabled:
             rollout_payload = {
                 "observations": observations_np,
                 "actions": _stack_or_empty(action_records, (0, num_envs, 1)),
-                "normalized_actions": _stack_or_empty(normalized_action_records, (0, num_envs, 1)),
                 "rewards": rewards_np,
                 "terminated": _stack_or_empty(terminated_records, (0, num_envs), dtype=bool),
                 "truncated": _stack_or_empty(truncated_records, (0, num_envs), dtype=bool),
                 "policy_compute_time": np.asarray(policy_compute_time_records, dtype=np.float64),
                 "observation_fields": np.asarray(OBSERVATION_FIELDS),
-                "policy_input_fields": np.asarray(policy.observation_adapter.field_names),
             }
             for key, records in step_extra_records.items():
                 if records:
@@ -461,7 +585,10 @@ def main():
                 else:
                     rollout_payload[f"step_{key}"] = np.full((rollout_steps, num_envs), np.nan, dtype=np.float32)
             for key, records in policy_extra_records.items():
-                rollout_payload[key] = _stack_or_empty(records, (0, *records[0].shape))
+                if records:
+                    rollout_payload[key] = _stack_or_empty(records, (0, num_envs))
+                else:
+                    rollout_payload[key] = np.full((rollout_steps, num_envs), np.nan, dtype=np.float32)
             if benchmark_records:
                 for key in benchmark_records[-1].keys():
                     rollout_payload[f"benchmark_{key}"] = np.asarray(
@@ -470,12 +597,12 @@ def main():
             np.savez_compressed(output_dir / "rollout.npz", **rollout_payload)
 
         completed_episodes = int(final_metrics.get("completed_episodes", 0))
+        mean_reward = reward_sum / reward_count if reward_count > 0 else float("nan")
         summary_row = {
             "run_name": output_dir.name,
             "run_config_path": str(run_config_path),
             "env_config_path": str(env_config_path),
             "policy_config_path": str(policy_config_path),
-            "checkpoint_path": policy_cfg.checkpoint_path,
             "seed": seed,
             "num_envs": num_envs,
             "target_episodes": target_episodes,
@@ -484,9 +611,24 @@ def main():
             "episode_length_s": env_cfg.episode_length_s,
             "task_name": env_cfg.task_name,
             "interface_name": env_cfg.interface_name,
-            "algorithm": policy_cfg.algorithm,
-            "observation_mode": policy_cfg.observation_mode,
-            "mean_reward": float(np.mean(rewards_np)) if rewards_np.size else float("nan"),
+            "policy_name": policy_cfg.name,
+            "angle_kp": policy_cfg.angle_pid.kp,
+            "angle_ti": policy_cfg.angle_pid.ti,
+            "angle_td": policy_cfg.angle_pid.td,
+            "max_theta_change": policy_cfg.angle_pid.max_theta_change,
+            "max_theta_ref": policy_cfg.angle_pid.max_theta_ref,
+            "acc_kp": policy_cfg.acceleration_pid.kp,
+            "acc_ti": policy_cfg.acceleration_pid.ti,
+            "acc_td": policy_cfg.acceleration_pid.td,
+            "max_delta_acc": policy_cfg.acceleration_pid.max_delta_acc,
+            "max_acc": policy_cfg.acceleration_pid.max_acc,
+            "action_sign": policy_cfg.acceleration_pid.action_sign,
+            "robustness_enabled": bool(env_cfg.robustness.enabled),
+            "action_delay_enabled": bool(env_cfg.robustness.action_delay_enabled),
+            "delay_step": int(env_cfg.robustness.delay_step),
+            "external_disturbance_enabled": bool(env_cfg.robustness.external_disturbance_enabled),
+            "external_disturbance_ou_clip": float(env_cfg.robustness.external_disturbance_ou_clip),
+            "mean_reward": mean_reward,
             "policy_compute_time_mean": float(np.mean(policy_compute_time_records))
             if policy_compute_time_records
             else float("nan"),
@@ -494,9 +636,14 @@ def main():
         for key, value in final_metrics.items():
             summary_row[f"benchmark_{key}"] = value
         append_csv_row(output_dir / "summary.csv", summary_row)
-        append_csv_row(PROJECT_ROOT / run_config.get("logging", {}).get("root_dir", "logs/rl") / "summary.csv", summary_row)
+        append_csv_row(
+            PROJECT_ROOT
+            / (args_cli.log_root or run_config.get("logging", {}).get("root_dir", "logs/cpid_acceleration"))
+            / "summary.csv",
+            summary_row,
+        )
 
-        print(f"[INFO] RL rollout finished. Logs saved to: {output_dir}")
+        print(f"[INFO] Acceleration CPID rollout finished. Logs saved to: {output_dir}")
         print(f"[INFO] Summary: {summary_row}")
     finally:
         if env is not None:

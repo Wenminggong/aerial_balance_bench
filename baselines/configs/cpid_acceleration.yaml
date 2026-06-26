@@ -1,0 +1,16 @@
+policy_name: cpid_acceleration
+
+angle_pid:
+  kp: 0.5
+  ti: 2.0
+  td: 0.6
+  max_theta_change: 0.0007
+  max_theta_ref: 0.06
+
+acceleration_pid:
+  kp: 5.0
+  ti: 1000.0
+  td: 0.8
+  max_delta_acc: auto
+  max_acc: auto
+  action_sign: -1.0

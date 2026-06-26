@@ -121,6 +121,8 @@ STEP_EXTRA_FIELDS = (
     "vg",
     "command_z",
     "executed_command_z",
+    "arz_cmd",
+    "executed_arz_cmd",
     "vrz_cmd",
     "executed_vrz_cmd",
     "ball_mass",
@@ -183,6 +185,7 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
 
     _maybe_set_attrs(env_cfg.target_position_task, config.get("target_position_task", config.get("task", {})))
     _maybe_set_attrs(env_cfg.trajectory_tracking_task, config.get("trajectory_tracking_task", {}))
+    _maybe_set_attrs(env_cfg.acceleration_interface, config.get("acceleration_interface", {}))
     _maybe_set_attrs(env_cfg.velocity_interface, config.get("velocity_interface", {}))
     _maybe_set_attrs(env_cfg.position_interface, config.get("position_interface", {}))
     _maybe_set_attrs(env_cfg.thrust_interface, config.get("thrust_interface", {}))

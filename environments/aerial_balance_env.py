@@ -25,6 +25,8 @@ from .evaluation import (
     TrajectoryTrackingEvaluatorCfg,
 )
 from .interfaces import (
+    AccelerationInterface,
+    AccelerationInterfaceCfg,
     PositionInterface,
     PositionInterfaceCfg,
     ThrustInterface,
@@ -111,6 +113,7 @@ class AerialBalanceEnvCfg(DirectRLEnvCfg):
     target_position_task: TargetPositionTaskCfg = TargetPositionTaskCfg()
     trajectory_tracking_task: TrajectoryTrackingTaskCfg = TrajectoryTrackingTaskCfg()
     interface_name: str = "velocity"
+    acceleration_interface: AccelerationInterfaceCfg = AccelerationInterfaceCfg()
     velocity_interface: VelocityInterfaceCfg = VelocityInterfaceCfg()
     position_interface: PositionInterfaceCfg = PositionInterfaceCfg()
     thrust_interface: ThrustInterfaceCfg = ThrustInterfaceCfg()
@@ -290,7 +293,9 @@ class AerialBalanceEnv(DirectRLEnv):
 
     def _configure_spaces(self, cfg: AerialBalanceEnvCfg):
         step_dt = cfg.decimation * cfg.sim.dt
-        if cfg.interface_name == "velocity":
+        if cfg.interface_name == "acceleration":
+            action_limit = cfg.acceleration_interface.max_delta_acc
+        elif cfg.interface_name == "velocity":
             action_limit = cfg.velocity_interface.max_acc * step_dt
         elif cfg.interface_name == "position":
             action_limit = 0.5 * cfg.position_interface.max_acc * step_dt**2
@@ -299,7 +304,7 @@ class AerialBalanceEnv(DirectRLEnv):
         else:
             raise ValueError(
                 f"Unsupported interface_name '{cfg.interface_name}'. "
-                "Expected 'velocity', 'position', or 'thrust'."
+                "Expected 'acceleration', 'velocity', 'position', or 'thrust'."
             )
         cfg.action_space = spaces.Box(
             low=np.array([-action_limit], dtype=np.float32),
@@ -311,6 +316,14 @@ class AerialBalanceEnv(DirectRLEnv):
         cfg.trajectory_tracking_evaluator.episode_length_s = cfg.episode_length_s
 
     def _create_control_interface(self, cfg: AerialBalanceEnvCfg):
+        if cfg.interface_name == "acceleration":
+            return AccelerationInterface(
+                cfg.acceleration_interface,
+                self.num_envs,
+                self.device,
+                self.step_dt,
+                cfg.sim.gravity,
+            )
         if cfg.interface_name == "velocity":
             return VelocityInterface(
                 cfg.velocity_interface,
@@ -337,7 +350,7 @@ class AerialBalanceEnv(DirectRLEnv):
             )
         raise ValueError(
             f"Unsupported interface_name '{cfg.interface_name}'. "
-            "Expected 'velocity', 'position', or 'thrust'."
+            "Expected 'acceleration', 'velocity', 'position', or 'thrust'."
         )
 
     def _create_task_and_evaluator(self, cfg: AerialBalanceEnvCfg):
@@ -489,6 +502,8 @@ class AerialBalanceEnv(DirectRLEnv):
         for key in (
             "vrz_cmd",
             "executed_vrz_cmd",
+            "arz_cmd",
+            "executed_arz_cmd",
             "drz_cmd",
             "executed_drz_cmd",
             "target_position_z",

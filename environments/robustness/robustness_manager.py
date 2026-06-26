@@ -243,6 +243,8 @@ class RobustnessManager:
 
     def _active_controller_gain(self, env):
         interface_name = env.cfg.interface_name
+        if interface_name == "acceleration":
+            return env.control_interface.attitude_controller, "attitude_gain", "attitude_gain"
         if interface_name == "position":
             return env.control_interface.position_controller, "pos_gain", "position_gain"
         if interface_name == "velocity":

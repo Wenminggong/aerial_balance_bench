@@ -9,7 +9,7 @@ Aerial-Balance-Bench is an Isaac Lab/Sim based benchmark for studying indirect d
 The benchmark provides:
 
 - Two task families: target-position balancing and trajectory tracking
-- Three high-level command interfaces: thrust, velocity, and position
+- Four high-level command interfaces: thrust, acceleration, velocity, and position
 - A Gym-style Isaac Lab environment with unified observations, actions, rewards, and evaluation metrics
 - Robustness tests for mass variation, low-level gain variation, action delay, and external disturbance
 - Reference baselines for cascaded PID, nonlinear MPC, and model-free RL
@@ -61,6 +61,7 @@ The selected interface controls how the high-level policy acts on the drone. All
 | Interface | Config value | Action meaning | Command executed by low-level controller | Notes |
 | --- | --- | --- | --- | --- |
 | Thrust command | `interface_name: thrust` | `delta_Frz`, an increment of vertical thrust | SE(3) attitude controller | Most direct actuation, strongest coupling with low-level flight dynamics. |
+| Acceleration command | `interface_name: acceleration` | `delta_arz`, an increment of drone vertical acceleration in `m/s^2` | SE(3) attitude controller | Direct vertical acceleration abstraction; only the Z acceleration command is changed, with default absolute limit `5 m/s^2` and per-step increment limit `0.5 m/s^2`. |
 | Velocity command | `interface_name: velocity` | `delta_vrz`, an increment of drone vertical velocity | SE(3) velocity controller | Main interface used by the reference baselines; practical separation between balancing and flight control, but delay-sensitive. |
 | Position command | `interface_name: position` | `delta_drz`, an increment of drone vertical position | SE(3) position controller | Highest-level abstraction, simpler high-level command semantics, usually more lag-prone. |
 
@@ -275,11 +276,11 @@ Common environment fields:
 | Field | Meaning |
 | --- | --- |
 | `task_name` | Selects `target_position` or `trajectory_tracking`. |
-| `interface_name` | Selects `velocity`, `position`, or `thrust`. |
+| `interface_name` | Selects `acceleration`, `velocity`, `position`, or `thrust`. |
 | `env` | Sets seed, number of parallel environments, episode length, device, and selected physical constants. |
 | `target_position_task` | Target-position reset ranges, goal sampling, reward weights, and failure threshold. |
 | `trajectory_tracking_task` | Reference type, amplitude/period settings, randomization, reward weights, and failure threshold. |
-| `velocity_interface`, `position_interface`, `thrust_interface` | Interface-specific action limits and low-level controller settings. |
+| `acceleration_interface`, `velocity_interface`, `position_interface`, `thrust_interface` | Interface-specific action limits and low-level controller settings. |
 | `robustness` | Enables mass, gain, delay, and disturbance tests. |
 | `target_position_evaluator`, `trajectory_tracking_evaluator` | Evaluation episode count, tolerance, and final-window settings. |
 | `runner` | Evaluation episode target, maximum rollout steps, rendering, and rollout saving. |

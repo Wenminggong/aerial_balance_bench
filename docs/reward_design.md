@@ -35,7 +35,7 @@ r_goal = (c - k_7 |e_k|) exp(-k_6 |v_b|), if |e_k| < e_goal; otherwise 0
 | `e_goal` | `goal_radius` | `0.05` | `TargetPositionTaskCfg` |
 | `c` | `goal_bonus` | `5.0` | `TargetPositionTaskCfg` |
 
-In code, `u_k` is the interface-specific `command_z`, and `a_k` is the high-level action increment. For the velocity interface, these correspond to the commanded vertical velocity and its increment.
+In code, `u_k` is the interface-specific `command_z`, and `a_k` is the high-level action increment. Their physical units depend on the selected control interface, such as vertical acceleration, velocity, position, or thrust.
 
 ## Trajectory Tracking
 
