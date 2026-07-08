@@ -6,6 +6,7 @@ logs/
 .vscode/
 .codex/
 .agents/
+AGENTS.md
 
 # Python cache files
 __pycache__/
