@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import VelocityModelStatePredictorCfg, make_velocity_state_predictor
 from .nmpc_core import (
     NMPCConstraintsCfg,
     NMPCControllerCfg,
@@ -93,7 +93,7 @@ class NMPCPolicy(BasePolicy):
         self.max_acc = float(cfg.max_acc)
         self.delta_vrz_limit = self.max_acc * self.step_dt
         self.max_velocity = float(cfg.max_velocity)
-        self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        self.state_predictor = make_velocity_state_predictor(cfg.state_predictor, num_envs, self.device)
 
         controller_cfg = self._controller_cfg()
         self.controller_pool = NMPCControllerPool(
@@ -129,12 +129,11 @@ class NMPCPolicy(BasePolicy):
 
     def act(self, observations: dict[str, torch.Tensor] | torch.Tensor, extras: dict | None = None) -> torch.Tensor:
         """Compute physical velocity-increment actions from 11-D benchmark observations."""
-        del extras
         raw_obs = self._extract_policy_observation(observations)
         if raw_obs.shape != (self.num_envs, 11):
             raise ValueError(f"NMPCPolicy expects observation shape ({self.num_envs}, 11), got {tuple(raw_obs.shape)}.")
 
-        model_obs = self.state_predictor.predict(raw_obs)
+        model_obs = self.state_predictor.predict(raw_obs, extras=extras)
         state = torch.stack(
             [
                 model_obs[:, ObservationIndex.PB],
@@ -235,6 +234,8 @@ class NMPCPolicy(BasePolicy):
             predictor_cfg.ball_mass = float(cfg.ball_mass)
         if _is_auto(predictor_cfg.ball_radius):
             predictor_cfg.ball_radius = float(cfg.ball_radius)
+        if _is_auto(predictor_cfg.ball_position_offset):
+            predictor_cfg.ball_position_offset = 0.33
 
     def _controller_cfg(self) -> NMPCControllerCfg:
         return NMPCControllerCfg(

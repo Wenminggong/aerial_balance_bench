@@ -254,6 +254,17 @@ python3 scripts/rl_policy_eval.py \
   --headless
 ```
 
+For an acceleration-interface RL checkpoint:
+
+```bash
+python3 scripts/rl_policy_eval.py \
+  --config baselines/configs/rl_target_position_rpo_eval_acceleration_delay_free.yaml \
+  --checkpoint /path/to/best_agent.pt \
+  --episodes 10 \
+  --num_envs 10 \
+  --headless
+```
+
 ### Train an RL policy using RPO
 
 ```bash
@@ -265,6 +276,58 @@ python3 scripts/rl_train.py \
 ```
 
 The default RPO training configuration uses the velocity interface and the `legacy8` observation adapter.
+
+The RL adapter also supports `error10`, which maps the 11-D benchmark observation to
+`[error, vb, ab, theta, omega, alpha, drz, vrz, arz, a_prev]`, where `error = pb - pg`.
+The `error9` adapter uses `[error, vb, ab, theta, omega, alpha, vrz, arz, a_prev]`,
+which removes both `drz` and `pg`.
+For delay-aware acceleration-interface RL, use `error9_acc_history`. It appends the
+latest fixed-delay command queue inputs to `error9`, so `delay_step=4` gives the
+13-D input
+`[error, vb, ab, theta, omega, alpha, vrz, arz, a_prev, arz_cmd_prev1, arz_cmd_prev2, arz_cmd_prev3, arz_cmd_prev4]`.
+Set `command_history_length: auto` to resolve the history length from
+`robustness.delay_step`; random `delay_step_choices` are not supported by this
+adapter. Checkpoints trained with `error9_acc_history` are not shape-compatible
+with ordinary `error9` checkpoints.
+Use an evaluation config with the same observation mode as the checkpoint, such as
+`rl_target_position_rpo_eval_delay_free_error10.yaml` or
+`rl_target_position_rpo_eval_acceleration_delay_free_error10.yaml`; `error9` checkpoints
+should use the corresponding `*_error9.yaml` configs.
+
+To train the acceleration-interface variant with `max_acc=5.0` and `max_delta_acc=0.5`:
+
+```bash
+python3 scripts/rl_train.py \
+  --config baselines/configs/rl_target_position_rpo_train_acceleration.yaml \
+  --num_envs 1024 \
+  --max_iterations 300 \
+  --headless
+```
+
+Seed sweeps can select the interface and observation adapter without overriding the full config:
+
+```bash
+OBS_MODE=error10 INTERFACE=velocity bash scripts/run_rl_train_seed_sweep.sh
+OBS_MODE=error10 INTERFACE=acceleration bash scripts/run_rl_train_seed_sweep.sh
+OBS_MODE=error9 INTERFACE=velocity bash scripts/run_rl_train_seed_sweep.sh
+OBS_MODE=error9 INTERFACE=acceleration bash scripts/run_rl_train_seed_sweep.sh
+OBS_MODE=error9_acc_history INTERFACE=acceleration bash scripts/run_rl_train_seed_sweep.sh
+```
+
+Training can warm-start from a previous skrl agent checkpoint:
+
+```bash
+python3 scripts/rl_train.py \
+  --config baselines/configs/rl_target_position_rpo_train_acceleration_error9.yaml \
+  --checkpoint logs/rl_train/rpo_target_position_acceleration_error9_seed_2025/checkpoints/best_agent.pt \
+  --num_envs 1024 \
+  --max_iterations 300 \
+  --headless
+```
+
+The checkpoint must match the selected algorithm, network, observation mode, and interface action scale. Warm-starting initializes the new run from the agent checkpoint; trainer timesteps and logs start fresh.
+
+Acceleration-interface RL evaluation supports both delay-free execution and policy-side delay compensation. The acceleration predictor can run in nominal model mode, response-aware mode for acceleration-response degradation, or UKF random-jerk mode for external-disturbance/human endpoint motion.
 
 
 ### Configuration files
@@ -327,7 +390,7 @@ The returned action must be a torch tensor with shape `(num_envs, 1)` on the env
 
 The reference baselines use the velocity-command interface. This gives the high-level controller a practical command abstraction, but also introduces latency because the low-level drone controller must track the commanded velocity.
 
-To compensate for action delay, the repository includes a model-based state predictor in `baselines/model_state_predictor.py`. Predictor-enabled configs, such as `cpid_predictor_15.yaml`, `nmpc_predictor_15.yaml`, and `rl_rpo_predictor_15.yaml`, use a velocity-interface model to predict the future observation after the configured delay horizon.
+To compensate for action delay, the repository includes model-based state predictors in `baselines/model_state_predictor.py`. Predictor-enabled configs, such as `cpid_predictor_15.yaml`, `nmpc_predictor_15.yaml`, and `rl_rpo_predictor_15.yaml`, use velocity-interface models to predict the future observation after the configured delay horizon. Acceleration-interface policies can also enable nominal, acceleration-response-aware, or UKF random-jerk human-aware prediction through their `state_predictor` config.
 
 ### Baselines
 

@@ -13,12 +13,13 @@ e_k = p_b(t_k) - p_g(t_k)
 and is implemented as:
 
 ```text
-r = r_object + r_control + r_failure + r_goal
+r = r_object + r_control + r_failure + r_goal + r_shape
 
 r_object = -k_1 e_k^2 - k_2 v_b^2
 r_control = -k_3 u_k^2 - k_4 a_k^2
 r_failure = -k_5, if |theta| > theta_max or |e_k| > e_max; otherwise 0
 r_goal = (c - k_7 |e_k|) exp(-k_6 |v_b|), if |e_k| < e_goal; otherwise 0
+r_shape = -k_8 (a_k - a_{k-1})^2 - k_9 theta^2 - k_10 omega^2
 ```
 
 | Paper parameter | Code field | Default value | Source |
@@ -34,8 +35,12 @@ r_goal = (c - k_7 |e_k|) exp(-k_6 |v_b|), if |e_k| < e_goal; otherwise 0
 | `e_max` | `max_error_for_failure` | `0.7` | `TargetPositionTaskCfg` |
 | `e_goal` | `goal_radius` | `0.05` | `TargetPositionTaskCfg` |
 | `c` | `goal_bonus` | `5.0` | `TargetPositionTaskCfg` |
+| `k_8` | `action_smoothness_weight` | `0.0` | `TargetPositionTaskCfg` |
+| `k_9` | `theta_weight` | `0.0` | `TargetPositionTaskCfg` |
+| `k_10` | `omega_weight` | `0.0` | `TargetPositionTaskCfg` |
 
 In code, `u_k` is the interface-specific `command_z`, and `a_k` is the high-level action increment. Their physical units depend on the selected control interface, such as vertical acceleration, velocity, position, or thrust.
+The shaping terms are disabled by default and only affect training or evaluation when their weights are explicitly set in configuration.
 
 ## Trajectory Tracking
 

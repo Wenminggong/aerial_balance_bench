@@ -10,14 +10,84 @@ set -uo pipefail
 #   NUM_SEEDS=5 bash scripts/run_rl_train_seed_sweep.sh
 #   SEEDS="0 1 2" bash scripts/run_rl_train_seed_sweep.sh
 #   NUM_ENVS=256 MAX_ITERATIONS=300 DEVICE=cuda:0 bash scripts/run_rl_train_seed_sweep.sh
+#   INTERFACE=acceleration OBS_MODE=error10 bash scripts/run_rl_train_seed_sweep.sh
+#   INTERFACE=acceleration OBS_MODE=error9 bash scripts/run_rl_train_seed_sweep.sh
+#   INTERFACE=acceleration OBS_MODE=error9_acc_history bash scripts/run_rl_train_seed_sweep.sh
+#   CHECKPOINT=logs/rl_train/run/checkpoints/best_agent.pt bash scripts/run_rl_train_seed_sweep.sh
 #   EXTRA_ARGS="--headless" bash scripts/run_rl_train_seed_sweep.sh
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
-CONFIG="${CONFIG:-baselines/configs/rl_target_position_rpo_train.yaml}"
+INTERFACE="${INTERFACE:-velocity}"
+OBS_MODE="${OBS_MODE:-legacy8}"
+SUPPORTED_COMBINATIONS="velocity:legacy8, acceleration:legacy8, velocity:error10, acceleration:error10, velocity:error9, acceleration:error9, acceleration:error9_acc_history"
+CONFIG_SOURCE="auto"
+if [[ -n "${CONFIG:-}" ]]; then
+    CONFIG_SOURCE="manual"
+else
+    case "${INTERFACE}:${OBS_MODE}" in
+        velocity:legacy8)
+            CONFIG="baselines/configs/rl_target_position_rpo_train.yaml"
+            ;;
+        acceleration:legacy8)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_acceleration.yaml"
+            ;;
+        velocity:error10)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_error10.yaml"
+            ;;
+        acceleration:error10)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_acceleration_error10.yaml"
+            ;;
+        velocity:error9)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_error9.yaml"
+            ;;
+        acceleration:error9)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_acceleration_error9.yaml"
+            ;;
+        acceleration:error9_acc_history)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_acceleration_error9_acc_history.yaml"
+            ;;
+        *)
+            echo "[ERROR] Unsupported INTERFACE:OBS_MODE '${INTERFACE}:${OBS_MODE}'." >&2
+            echo "[ERROR] Supported combinations: ${SUPPORTED_COMBINATIONS}." >&2
+            exit 1
+            ;;
+    esac
+fi
+
+if [[ -z "${RUN_PREFIX:-}" ]]; then
+    case "${INTERFACE}:${OBS_MODE}" in
+        velocity:legacy8)
+            RUN_PREFIX="rpo_target_position_legacy8"
+            ;;
+        acceleration:legacy8)
+            RUN_PREFIX="rpo_target_position_acceleration_legacy8"
+            ;;
+        velocity:error10)
+            RUN_PREFIX="rpo_target_position_error10"
+            ;;
+        acceleration:error10)
+            RUN_PREFIX="rpo_target_position_acceleration_error10"
+            ;;
+        velocity:error9)
+            RUN_PREFIX="rpo_target_position_error9"
+            ;;
+        acceleration:error9)
+            RUN_PREFIX="rpo_target_position_acceleration_error9"
+            ;;
+        acceleration:error9_acc_history)
+            RUN_PREFIX="rpo_target_position_acceleration_error9_acc_history"
+            ;;
+        *)
+            echo "[ERROR] Unsupported INTERFACE:OBS_MODE '${INTERFACE}:${OBS_MODE}'." >&2
+            echo "[ERROR] Supported combinations: ${SUPPORTED_COMBINATIONS}." >&2
+            exit 1
+            ;;
+    esac
+fi
+
 LOG_ROOT="${LOG_ROOT:-logs/rl_train/rl_train_seed_sweeps}"
-RUN_PREFIX="${RUN_PREFIX:-rpo_target_position_legacy8}"
 NUM_SEEDS="${NUM_SEEDS:-3}"
 SEED_MIN="${SEED_MIN:-0}"
 SEED_MAX="${SEED_MAX:-1000000}"
@@ -27,6 +97,7 @@ DEVICE="${DEVICE:-}"
 HEADLESS="${HEADLESS:-1}"
 STOP_ON_FAILURE="${STOP_ON_FAILURE:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+CHECKPOINT="${CHECKPOINT:-}"
 
 mkdir -p "${LOG_ROOT}"
 
@@ -71,8 +142,13 @@ if [[ "${#SEED_LIST[@]}" -eq 0 ]]; then
 fi
 
 echo "[INFO] Project root: ${PROJECT_ROOT}"
+echo "[INFO] Interface: ${INTERFACE}"
+echo "[INFO] Observation mode: ${OBS_MODE}"
 echo "[INFO] Config: ${CONFIG}"
+echo "[INFO] Config source: ${CONFIG_SOURCE}"
 echo "[INFO] Log root: ${LOG_ROOT}"
+echo "[INFO] Run prefix: ${RUN_PREFIX}"
+echo "[INFO] Checkpoint: ${CHECKPOINT:-none}"
 echo "[INFO] Seeds: ${SEED_LIST[*]}"
 
 for seed in "${SEED_LIST[@]}"; do
@@ -86,6 +162,9 @@ for seed in "${SEED_LIST[@]}"; do
     fi
     if [[ -n "${MAX_ITERATIONS}" ]]; then
         cmd+=(--max_iterations "${MAX_ITERATIONS}")
+    fi
+    if [[ -n "${CHECKPOINT}" ]]; then
+        cmd+=(--checkpoint "${CHECKPOINT}")
     fi
     if [[ -n "${DEVICE}" ]]; then
         cmd+=(--device "${DEVICE}")

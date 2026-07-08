@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import torch
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
+from .model_state_predictor import VelocityModelStatePredictorCfg, make_acceleration_state_predictor
 
 
 @dataclass
@@ -41,6 +42,7 @@ class AccelerationCPIDPolicyCfg(BasePolicyCfg):
     name: str = "cpid_acceleration"
     angle_pid: AccelerationAnglePIDCfg = field(default_factory=AccelerationAnglePIDCfg)
     acceleration_pid: AccelerationPIDCfg = field(default_factory=AccelerationPIDCfg)
+    state_predictor: VelocityModelStatePredictorCfg = field(default_factory=VelocityModelStatePredictorCfg)
 
     @classmethod
     def from_dict(cls, data: Mapping | None) -> "AccelerationCPIDPolicyCfg":
@@ -62,6 +64,7 @@ class AccelerationCPIDPolicyCfg(BasePolicyCfg):
         )
         _update_cfg(cfg.angle_pid, angle_data)
         _update_cfg(cfg.acceleration_pid, acceleration_data)
+        cfg.state_predictor = VelocityModelStatePredictorCfg.from_dict(policy_data.get("state_predictor", {}))
         return cfg
 
 
@@ -84,6 +87,8 @@ class AccelerationCPIDPolicy(BasePolicy):
         self.max_delta_acc = self._resolve_positive_limit(cfg.acceleration_pid.max_delta_acc, default=0.5)
         self.max_acc = self._resolve_nonnegative_limit(cfg.acceleration_pid.max_acc, default=5.0)
         self.action_sign = float(cfg.acceleration_pid.action_sign)
+        self._resolve_predictor_cfg_defaults()
+        self.state_predictor = make_acceleration_state_predictor(cfg.state_predictor, num_envs, self.device)
 
         self.theta_ref = torch.zeros((self.num_envs, 1), device=self.device)
         self.acceleration_cmd = torch.zeros((self.num_envs, 1), device=self.device)
@@ -132,10 +137,10 @@ class AccelerationCPIDPolicy(BasePolicy):
             buffer[env_ids] = 0.0
         self.saturated[env_ids] = False
         self.history_needs_init[env_ids] = True
+        self.state_predictor.reset(env_ids)
 
     def act(self, observations: dict[str, torch.Tensor] | torch.Tensor, extras: dict | None = None) -> torch.Tensor:
         """Compute the acceleration increment action ``delta_arz``."""
-        del extras
         raw_obs = self._extract_policy_observation(observations)
         if raw_obs.shape[-1] < 11:
             raise ValueError(
@@ -143,11 +148,10 @@ class AccelerationCPIDPolicy(BasePolicy):
             )
         if raw_obs.shape[0] != self.num_envs:
             raise ValueError(f"AccelerationCPIDPolicy expected {self.num_envs} envs, got {raw_obs.shape[0]}.")
-        obs = raw_obs[:, :11]
+        raw_obs = raw_obs[:, :11]
 
-        raw_pb = obs[:, ObservationIndex.PB : ObservationIndex.PB + 1]
-        raw_pg = obs[:, ObservationIndex.PG : ObservationIndex.PG + 1]
-        current_theta = obs[:, ObservationIndex.THETA : ObservationIndex.THETA + 1]
+        raw_pb = raw_obs[:, ObservationIndex.PB : ObservationIndex.PB + 1]
+        raw_pg = raw_obs[:, ObservationIndex.PG : ObservationIndex.PG + 1]
         self.raw_error.copy_(raw_pb - raw_pg)
 
         init_envs = self.history_needs_init.clone()
@@ -155,9 +159,18 @@ class AccelerationCPIDPolicy(BasePolicy):
             self.error_prev1[init_envs] = self.raw_error[init_envs]
             self.error_prev2[init_envs] = self.raw_error[init_envs]
 
-        self.error.copy_(self.raw_error)
-        self.error_dot.copy_(self.error - self.error_prev1)
-        self.error_ddot.copy_(self.error - 2.0 * self.error_prev1 + self.error_prev2)
+        obs = self.state_predictor.predict(raw_obs, error_prev1=self.error_prev1, extras=extras)
+        current_theta = obs[:, ObservationIndex.THETA : ObservationIndex.THETA + 1]
+
+        if self.state_predictor.active:
+            error, error_dot, error_ddot = self.state_predictor.get_error_prediction()
+            self.error.copy_(error)
+            self.error_dot.copy_(error_dot)
+            self.error_ddot.copy_(error_ddot)
+        else:
+            self.error.copy_(self.raw_error)
+            self.error_dot.copy_(self.error - self.error_prev1)
+            self.error_ddot.copy_(self.error - 2.0 * self.error_prev1 + self.error_prev2)
 
         self.delta_theta.copy_(self._angle_increment(self.error, self.error_dot, self.error_ddot))
         self.theta_ref += self.delta_theta
@@ -194,6 +207,7 @@ class AccelerationCPIDPolicy(BasePolicy):
         self.error_theta_prev1.copy_(self.error_theta)
         if torch.any(init_envs):
             self.history_needs_init[init_envs] = False
+        self.state_predictor.update_after_action(self.last_action)
         return self.last_action.clone()
 
     def get_state(self) -> dict[str, torch.Tensor]:
@@ -212,6 +226,7 @@ class AccelerationCPIDPolicy(BasePolicy):
             "policy_delta_arz": self.last_action[:, 0],
             "policy_arz_cmd": self.acceleration_cmd[:, 0],
             "policy_acceleration_saturated": self.saturated[:, 0].to(dtype=torch.float32),
+            **self.state_predictor.get_state(),
         }
 
     def to(self, device: str | torch.device):
@@ -219,8 +234,53 @@ class AccelerationCPIDPolicy(BasePolicy):
         for name, value in vars(self).items():
             if isinstance(value, torch.Tensor):
                 setattr(self, name, value.to(device=device))
+        self.state_predictor.to(device)
         self.device = device
         return self
+
+    def _resolve_predictor_cfg_defaults(self):
+        predictor_cfg = self.cfg.state_predictor
+        if _is_auto(predictor_cfg.delay_step):
+            predictor_cfg.delay_step = 0
+        if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
+            predictor_cfg.step_dt = self.step_dt
+        if _is_auto(predictor_cfg.max_delta_acc) or float(predictor_cfg.max_delta_acc) <= 0.0:
+            predictor_cfg.max_delta_acc = self.max_delta_acc
+        if _is_auto(predictor_cfg.max_acc) or float(predictor_cfg.max_acc) <= 0.0:
+            predictor_cfg.max_acc = self.max_acc if self.max_acc > 0.0 else self.max_delta_acc
+        if _is_auto(predictor_cfg.max_velocity):
+            predictor_cfg.max_velocity = 0.0
+        if _is_auto(predictor_cfg.plank_length):
+            predictor_cfg.plank_length = 1.06
+        if _is_auto(predictor_cfg.rope_length):
+            predictor_cfg.rope_length = 0.9
+        if _is_auto(predictor_cfg.gravity):
+            predictor_cfg.gravity = 9.81
+        if _is_auto(predictor_cfg.ball_mass):
+            predictor_cfg.ball_mass = 0.0005
+        if _is_auto(predictor_cfg.ball_radius):
+            predictor_cfg.ball_radius = 0.023
+        if _is_auto(predictor_cfg.ball_position_offset):
+            predictor_cfg.ball_position_offset = 0.33
+        self._resolve_acceleration_response_cfg_defaults(predictor_cfg)
+
+    def _resolve_acceleration_response_cfg_defaults(self, predictor_cfg):
+        if _is_auto(predictor_cfg.acceleration_response_tau_s):
+            predictor_cfg.acceleration_response_tau_s = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_gain):
+            predictor_cfg.acceleration_response_gain = 1.0
+        if _is_auto(predictor_cfg.acceleration_response_bias):
+            predictor_cfg.acceleration_response_bias = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_noise_mode):
+            predictor_cfg.acceleration_response_noise_mode = "none"
+        if _is_auto(predictor_cfg.acceleration_response_noise_std):
+            predictor_cfg.acceleration_response_noise_std = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_ou_theta):
+            predictor_cfg.acceleration_response_ou_theta = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_noise_clip):
+            predictor_cfg.acceleration_response_noise_clip = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_max_abs_acc):
+            predictor_cfg.acceleration_response_max_abs_acc = 0.0
 
     def _angle_increment(self, error: torch.Tensor, error_dot: torch.Tensor, error_ddot: torch.Tensor) -> torch.Tensor:
         cfg = self.cfg.angle_pid

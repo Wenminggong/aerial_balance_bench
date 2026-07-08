@@ -1,0 +1,13 @@
+env_config: environments/configs/template_eval_acceleration_response_realistic.yaml
+policy_config: baselines/configs/rl_rpo_error9.yaml
+checkpoint_path: null
+
+runner:
+  target_episodes: 500
+  max_steps: null
+  render: false
+  save_rollout: true
+
+logging:
+  root_dir: logs/rl_train/rpo_target_position_acceleration_error9_seed_2025
+  run_name: rpo_target_position_acceleration_error9_eval_delay_4_compensation_human_acceleration_response_disturbance

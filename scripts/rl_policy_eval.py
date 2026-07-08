@@ -131,6 +131,16 @@ STEP_EXTRA_FIELDS = (
     "action_delay_enabled",
     "delay_step",
     "delayed_command_z",
+    "acceleration_response_enabled",
+    "acceleration_response_tau_s",
+    "acceleration_response_gain",
+    "acceleration_response_bias",
+    "acceleration_response_noise_std",
+    "acceleration_response_ou_theta",
+    "acceleration_response_noise_z",
+    "acceleration_response_target_z",
+    "acceleration_response_executed_z",
+    "acceleration_response_error_z",
     "external_disturbance_enabled",
     "external_disturbance_vel_z",
     "last_action",
@@ -200,12 +210,73 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
 def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
     if env_cfg.task_name != "target_position":
         raise ValueError("RLPolicy runner currently supports only task_name='target_position'.")
-    if env_cfg.interface_name != "velocity":
-        raise ValueError("RLPolicy runner currently supports only interface_name='velocity'.")
+    if env_cfg.interface_name not in {"velocity", "acceleration"}:
+        raise ValueError("RLPolicy runner currently supports interface_name='velocity' or 'acceleration'.")
+
+
+def _resolve_command_history_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg):
+    history_mode = policy_cfg.observation_mode == "error9_acc_history"
+    delay_choices = tuple(int(value) for value in (env_cfg.robustness.delay_step_choices or ()))
+    if history_mode and delay_choices:
+        raise ValueError("observation_mode='error9_acc_history' currently supports only fixed delay_step.")
+
+    if isinstance(policy_cfg.command_history_length, str):
+        if policy_cfg.command_history_length.lower() != "auto":
+            policy_cfg.command_history_length = int(policy_cfg.command_history_length)
+        elif history_mode:
+            if not (env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled):
+                raise ValueError(
+                    "command_history_length='auto' with observation_mode='error9_acc_history' "
+                    "requires fixed action delay to be enabled."
+                )
+            policy_cfg.command_history_length = int(env_cfg.robustness.delay_step)
+        else:
+            policy_cfg.command_history_length = 0
+    else:
+        policy_cfg.command_history_length = int(policy_cfg.command_history_length)
+
+    if int(policy_cfg.command_history_length) < 0:
+        raise ValueError("command_history_length must be non-negative.")
+    if history_mode:
+        if env_cfg.interface_name != "acceleration":
+            raise ValueError("observation_mode='error9_acc_history' requires interface_name='acceleration'.")
+        if int(policy_cfg.command_history_length) <= 0:
+            raise ValueError("observation_mode='error9_acc_history' requires command_history_length > 0.")
+    elif int(policy_cfg.command_history_length) != 0:
+        raise ValueError("command_history_length is only supported with observation_mode='error9_acc_history'.")
 
 
 def _resolve_predictor_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg, step_dt: float):
     predictor_cfg = policy_cfg.state_predictor
+    if env_cfg.interface_name == "acceleration":
+        if _is_auto(predictor_cfg.delay_step):
+            if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
+                predictor_cfg.delay_step = int(env_cfg.robustness.delay_step)
+            else:
+                predictor_cfg.delay_step = 0
+        if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
+            predictor_cfg.step_dt = float(step_dt)
+        if _is_auto(predictor_cfg.max_delta_acc):
+            predictor_cfg.max_delta_acc = float(env_cfg.acceleration_interface.max_delta_acc)
+        if _is_auto(predictor_cfg.max_acc):
+            predictor_cfg.max_acc = float(env_cfg.acceleration_interface.max_acc)
+        if _is_auto(predictor_cfg.max_velocity):
+            predictor_cfg.max_velocity = 0.0
+        if _is_auto(predictor_cfg.plank_length):
+            predictor_cfg.plank_length = float(env_cfg.plank_length)
+        if _is_auto(predictor_cfg.rope_length):
+            predictor_cfg.rope_length = float(env_cfg.rope_length)
+        if _is_auto(predictor_cfg.gravity):
+            predictor_cfg.gravity = float(abs(env_cfg.sim.gravity[-1]))
+        if _is_auto(predictor_cfg.ball_radius):
+            predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
+        if _is_auto(predictor_cfg.ball_mass):
+            predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+        if _is_auto(predictor_cfg.ball_position_offset):
+            predictor_cfg.ball_position_offset = float(env_cfg.beam_block_offset + env_cfg.plank_slide_length)
+        _resolve_acceleration_response_predictor_cfg_from_env(predictor_cfg, env_cfg)
+        return
+
     if _is_auto(predictor_cfg.delay_step):
         if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
             predictor_cfg.delay_step = int(env_cfg.robustness.delay_step)
@@ -227,6 +298,44 @@ def _resolve_predictor_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBala
         predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
     if _is_auto(predictor_cfg.ball_mass):
         predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+    if _is_auto(predictor_cfg.ball_position_offset):
+        predictor_cfg.ball_position_offset = float(env_cfg.beam_block_offset + env_cfg.plank_slide_length)
+
+
+def _resolve_acceleration_response_predictor_cfg_from_env(predictor_cfg, env_cfg: AerialBalanceEnvCfg):
+    robustness_cfg = env_cfg.robustness
+    if _is_auto(predictor_cfg.acceleration_response_tau_s):
+        predictor_cfg.acceleration_response_tau_s = _range_midpoint(robustness_cfg.acceleration_response_tau_s_range)
+    if _is_auto(predictor_cfg.acceleration_response_gain):
+        predictor_cfg.acceleration_response_gain = _range_midpoint(robustness_cfg.acceleration_response_gain_range)
+    if _is_auto(predictor_cfg.acceleration_response_bias):
+        predictor_cfg.acceleration_response_bias = _range_midpoint(robustness_cfg.acceleration_response_bias_range)
+    if _is_auto(predictor_cfg.acceleration_response_noise_mode):
+        predictor_cfg.acceleration_response_noise_mode = str(robustness_cfg.acceleration_response_noise_mode)
+    if _is_auto(predictor_cfg.acceleration_response_noise_std):
+        predictor_cfg.acceleration_response_noise_std = _range_midpoint(
+            robustness_cfg.acceleration_response_noise_std_range
+        )
+    if _is_auto(predictor_cfg.acceleration_response_ou_theta):
+        predictor_cfg.acceleration_response_ou_theta = _range_midpoint(
+            robustness_cfg.acceleration_response_ou_theta_range
+        )
+    if _is_auto(predictor_cfg.acceleration_response_noise_clip):
+        predictor_cfg.acceleration_response_noise_clip = float(robustness_cfg.acceleration_response_noise_clip)
+    if _is_auto(predictor_cfg.acceleration_response_max_abs_acc):
+        predictor_cfg.acceleration_response_max_abs_acc = float(robustness_cfg.acceleration_response_max_abs_acc)
+
+
+def _range_midpoint(values) -> float:
+    if values is None:
+        return 0.0
+    if isinstance(values, (int, float)):
+        return float(values)
+    if len(values) == 0:
+        return 0.0
+    if len(values) == 1:
+        return float(values[0])
+    return 0.5 * (float(values[0]) + float(values[1]))
 
 
 def _is_auto(value) -> bool:
@@ -333,6 +442,7 @@ def main():
 
     env_cfg = _build_env_cfg(env_config, seed)
     _validate_env_cfg(env_cfg)
+    _resolve_command_history_cfg_from_env(policy_cfg, env_cfg)
     runner_cfg = run_config.get("runner", {})
     target_episodes = int(args_cli.episodes if args_cli.episodes is not None else runner_cfg.get("target_episodes", 1))
     target_episodes = max(target_episodes, 1)
@@ -359,7 +469,14 @@ def main():
         base_env = env.unwrapped
         physical_action_limit = float(base_env.action_space.high[0])
         _resolve_predictor_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
-        policy = RLPolicy(policy_cfg, base_env.num_envs, base_env.device, base_env.step_dt, physical_action_limit)
+        policy = RLPolicy(
+            policy_cfg,
+            base_env.num_envs,
+            base_env.device,
+            base_env.step_dt,
+            physical_action_limit,
+            interface_name=env_cfg.interface_name,
+        )
         num_envs = base_env.num_envs
 
         save_yaml(
@@ -372,10 +489,64 @@ def main():
                 "algorithm": policy_cfg.algorithm,
                 "observation_mode": policy_cfg.observation_mode,
                 "policy_input_fields": list(policy.observation_adapter.field_names),
+                "policy_input_dim": policy.observation_adapter.input_dim,
+                "command_history_length": int(policy_cfg.command_history_length),
                 "physical_action_limit": physical_action_limit,
                 "checkpoint_path": policy_cfg.checkpoint_path,
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,
+                "state_predictor_type": policy_cfg.state_predictor.type,
                 "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
+                "state_predictor_max_delta_acc": policy_cfg.state_predictor.max_delta_acc,
+                "state_predictor_max_acc": policy_cfg.state_predictor.max_acc,
+                "state_predictor_ball_position_offset": policy_cfg.state_predictor.ball_position_offset,
+                "state_predictor_lambda_j": policy_cfg.state_predictor.lambda_j,
+                "state_predictor_ukf_alpha": policy_cfg.state_predictor.ukf_alpha,
+                "state_predictor_ukf_beta": policy_cfg.state_predictor.ukf_beta,
+                "state_predictor_ukf_kappa": policy_cfg.state_predictor.ukf_kappa,
+                "state_predictor_process_covariance_diag": list(
+                    policy_cfg.state_predictor.process_covariance_diag
+                ),
+                "state_predictor_measurement_covariance_diag": list(
+                    policy_cfg.state_predictor.measurement_covariance_diag
+                ),
+                "state_predictor_initial_covariance_diag": list(
+                    policy_cfg.state_predictor.initial_covariance_diag
+                ),
+                "state_predictor_human_velocity_key": policy_cfg.state_predictor.human_velocity_key,
+                "state_predictor_human_velocity_sign": policy_cfg.state_predictor.human_velocity_sign,
+                "state_predictor_missing_human_velocity_policy": (
+                    policy_cfg.state_predictor.missing_human_velocity_policy
+                ),
+                "state_predictor_acceleration_response_model": (
+                    policy_cfg.state_predictor.acceleration_response_model
+                ),
+                "state_predictor_acceleration_response_source": (
+                    policy_cfg.state_predictor.acceleration_response_source
+                ),
+                "state_predictor_acceleration_response_tau_s": (
+                    policy_cfg.state_predictor.acceleration_response_tau_s
+                ),
+                "state_predictor_acceleration_response_gain": (
+                    policy_cfg.state_predictor.acceleration_response_gain
+                ),
+                "state_predictor_acceleration_response_bias": (
+                    policy_cfg.state_predictor.acceleration_response_bias
+                ),
+                "state_predictor_acceleration_response_noise_mode": (
+                    policy_cfg.state_predictor.acceleration_response_noise_mode
+                ),
+                "state_predictor_acceleration_response_noise_std": (
+                    policy_cfg.state_predictor.acceleration_response_noise_std
+                ),
+                "state_predictor_acceleration_response_ou_theta": (
+                    policy_cfg.state_predictor.acceleration_response_ou_theta
+                ),
+                "state_predictor_acceleration_response_noise_clip": (
+                    policy_cfg.state_predictor.acceleration_response_noise_clip
+                ),
+                "state_predictor_acceleration_response_max_abs_acc": (
+                    policy_cfg.state_predictor.acceleration_response_max_abs_acc
+                ),
                 "run_config_path": str(run_config_path),
                 "env_config_path": str(env_config_path),
                 "policy_config_path": str(policy_config_path),

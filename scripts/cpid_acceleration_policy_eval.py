@@ -186,10 +186,32 @@ STEP_EXTRA_FIELDS = (
     "action_delay_enabled",
     "delay_step",
     "delayed_command_z",
+    "acceleration_response_enabled",
+    "acceleration_response_tau_s",
+    "acceleration_response_gain",
+    "acceleration_response_bias",
+    "acceleration_response_noise_std",
+    "acceleration_response_ou_theta",
+    "acceleration_response_noise_z",
+    "acceleration_response_target_z",
+    "acceleration_response_executed_z",
+    "acceleration_response_error_z",
     "external_disturbance_enabled",
     "external_disturbance_vel_z",
     "external_disturbance_ou_theta",
     "external_disturbance_ou_sigma",
+    "observation_degradation_enabled",
+    "observation_filter_enabled",
+    "obs_pb_clean",
+    "obs_pb_corrupted",
+    "obs_pb_noise",
+    "obs_pb_filtered",
+    "obs_pb_filter_noise",
+    "obs_theta_clean",
+    "obs_theta_corrupted",
+    "obs_theta_noise",
+    "obs_theta_filtered",
+    "obs_theta_filter_noise",
     "last_action",
     "trajectory_type_id",
     "trajectory_amplitude",
@@ -210,6 +232,37 @@ POLICY_EXTRA_FIELDS = (
     "policy_delta_arz",
     "policy_arz_cmd",
     "policy_acceleration_saturated",
+    "policy_predictor_enabled",
+    "policy_predicted_pb",
+    "policy_predicted_vb",
+    "policy_predicted_ab",
+    "policy_predicted_theta",
+    "policy_predicted_omega",
+    "policy_predicted_alpha",
+    "policy_predicted_drz",
+    "policy_predicted_vrz",
+    "policy_predicted_arz",
+    "policy_predicted_pg",
+    "policy_predicted_a_prev",
+    "policy_predictor_command_z",
+    "policy_predictor_error",
+    "policy_predictor_error_dot",
+    "policy_predictor_error_ddot",
+    "policy_predictor_response_active",
+    "policy_predictor_response_reference_z",
+    "policy_predictor_response_target_z",
+    "policy_predictor_response_executed_z",
+    "policy_predictor_response_error_z",
+    "policy_predictor_response_noise_z",
+    "policy_predictor_type_id",
+    "policy_ukf_estimated_v_hz",
+    "policy_ukf_estimated_a_hz",
+    "policy_ukf_estimated_j_hz",
+    "policy_ukf_measured_v_hz",
+    "policy_ukf_human_velocity_valid",
+    "policy_ukf_covariance_trace",
+    "policy_ukf_innovation_norm",
+    "policy_ukf_omega_residual",
 )
 
 
@@ -290,6 +343,7 @@ def _apply_cli_overrides(env_cfg: AerialBalanceEnvCfg, policy_cfg: AccelerationC
 
     if args_cli.delay_step is not None:
         env_cfg.robustness.delay_step = int(args_cli.delay_step)
+        env_cfg.robustness.delay_step_choices = ()
         env_cfg.robustness.action_delay_enabled = int(args_cli.delay_step) > 0
         robustness_override_requested = True
     if args_cli.action_delay_enabled is not None:
@@ -302,10 +356,14 @@ def _apply_cli_overrides(env_cfg: AerialBalanceEnvCfg, policy_cfg: AccelerationC
         env_cfg.robustness.external_disturbance_ou_clip = float(args_cli.external_disturbance_ou_clip)
         robustness_override_requested = True
     if robustness_override_requested:
+        delay_choices = tuple(int(value) for value in (env_cfg.robustness.delay_step_choices or ()))
         env_cfg.robustness.enabled = bool(
             env_cfg.robustness.ball_mass_variation_enabled
             or env_cfg.robustness.controller_gain_variation_enabled
-            or (env_cfg.robustness.action_delay_enabled and int(env_cfg.robustness.delay_step) > 0)
+            or (
+                env_cfg.robustness.action_delay_enabled
+                and (int(env_cfg.robustness.delay_step) > 0 or any(value > 0 for value in delay_choices))
+            )
             or env_cfg.robustness.external_disturbance_enabled
         )
 
@@ -340,6 +398,75 @@ def _resolve_policy_limits_from_env(policy_cfg: AccelerationCPIDPolicyCfg, env_c
         acc_cfg.max_delta_acc = float(env_cfg.acceleration_interface.max_delta_acc)
     if _is_auto(acc_cfg.max_acc):
         acc_cfg.max_acc = float(env_cfg.acceleration_interface.max_acc)
+
+
+def _resolve_predictor_cfg_from_env(policy_cfg: AccelerationCPIDPolicyCfg, env_cfg: AerialBalanceEnvCfg, step_dt: float):
+    predictor_cfg = policy_cfg.state_predictor
+    if _is_auto(predictor_cfg.delay_step):
+        if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
+            predictor_cfg.delay_step = int(env_cfg.robustness.delay_step)
+        else:
+            predictor_cfg.delay_step = 0
+    if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
+        predictor_cfg.step_dt = float(step_dt)
+    if _is_auto(predictor_cfg.max_delta_acc):
+        predictor_cfg.max_delta_acc = float(env_cfg.acceleration_interface.max_delta_acc)
+    if _is_auto(predictor_cfg.max_acc):
+        predictor_cfg.max_acc = float(env_cfg.acceleration_interface.max_acc)
+    if _is_auto(predictor_cfg.max_velocity):
+        predictor_cfg.max_velocity = 0.0
+    if _is_auto(predictor_cfg.plank_length):
+        predictor_cfg.plank_length = float(env_cfg.plank_length)
+    if _is_auto(predictor_cfg.rope_length):
+        predictor_cfg.rope_length = float(env_cfg.rope_length)
+    if _is_auto(predictor_cfg.gravity):
+        predictor_cfg.gravity = float(abs(env_cfg.sim.gravity[-1]))
+    if _is_auto(predictor_cfg.ball_radius):
+        predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
+    if _is_auto(predictor_cfg.ball_mass):
+        predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+    if _is_auto(predictor_cfg.ball_position_offset):
+        predictor_cfg.ball_position_offset = float(env_cfg.beam_block_offset + env_cfg.plank_slide_length)
+    _resolve_acceleration_response_predictor_cfg_from_env(predictor_cfg, env_cfg)
+
+
+def _resolve_acceleration_response_predictor_cfg_from_env(
+    predictor_cfg,
+    env_cfg: AerialBalanceEnvCfg,
+):
+    robustness_cfg = env_cfg.robustness
+    if _is_auto(predictor_cfg.acceleration_response_tau_s):
+        predictor_cfg.acceleration_response_tau_s = _range_midpoint(robustness_cfg.acceleration_response_tau_s_range)
+    if _is_auto(predictor_cfg.acceleration_response_gain):
+        predictor_cfg.acceleration_response_gain = _range_midpoint(robustness_cfg.acceleration_response_gain_range)
+    if _is_auto(predictor_cfg.acceleration_response_bias):
+        predictor_cfg.acceleration_response_bias = _range_midpoint(robustness_cfg.acceleration_response_bias_range)
+    if _is_auto(predictor_cfg.acceleration_response_noise_mode):
+        predictor_cfg.acceleration_response_noise_mode = str(robustness_cfg.acceleration_response_noise_mode)
+    if _is_auto(predictor_cfg.acceleration_response_noise_std):
+        predictor_cfg.acceleration_response_noise_std = _range_midpoint(
+            robustness_cfg.acceleration_response_noise_std_range
+        )
+    if _is_auto(predictor_cfg.acceleration_response_ou_theta):
+        predictor_cfg.acceleration_response_ou_theta = _range_midpoint(
+            robustness_cfg.acceleration_response_ou_theta_range
+        )
+    if _is_auto(predictor_cfg.acceleration_response_noise_clip):
+        predictor_cfg.acceleration_response_noise_clip = float(robustness_cfg.acceleration_response_noise_clip)
+    if _is_auto(predictor_cfg.acceleration_response_max_abs_acc):
+        predictor_cfg.acceleration_response_max_abs_acc = float(robustness_cfg.acceleration_response_max_abs_acc)
+
+
+def _range_midpoint(values) -> float:
+    if values is None:
+        return 0.0
+    if isinstance(values, (int, float)):
+        return float(values)
+    if len(values) == 0:
+        return 0.0
+    if len(values) == 1:
+        return float(values[0])
+    return 0.5 * (float(values[0]) + float(values[1]))
 
 
 def _is_auto(value) -> bool:
@@ -454,6 +581,7 @@ def main():
             env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
         base_env = env.unwrapped
+        _resolve_predictor_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
         policy = AccelerationCPIDPolicy(policy_cfg, base_env.num_envs, base_env.device, base_env.step_dt)
         num_envs = base_env.num_envs
 
@@ -473,6 +601,61 @@ def main():
                 "policy_step_dt": base_env.step_dt,
                 "angle_pid": vars(policy_cfg.angle_pid),
                 "acceleration_pid": vars(policy_cfg.acceleration_pid),
+                "state_predictor_enabled": policy_cfg.state_predictor.enabled,
+                "state_predictor_type": policy_cfg.state_predictor.type,
+                "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
+                "state_predictor_solver": policy_cfg.state_predictor.solver,
+                "state_predictor_max_delta_acc": policy_cfg.state_predictor.max_delta_acc,
+                "state_predictor_max_acc": policy_cfg.state_predictor.max_acc,
+                "state_predictor_ball_position_offset": policy_cfg.state_predictor.ball_position_offset,
+                "state_predictor_lambda_j": policy_cfg.state_predictor.lambda_j,
+                "state_predictor_ukf_alpha": policy_cfg.state_predictor.ukf_alpha,
+                "state_predictor_ukf_beta": policy_cfg.state_predictor.ukf_beta,
+                "state_predictor_ukf_kappa": policy_cfg.state_predictor.ukf_kappa,
+                "state_predictor_process_covariance_diag": list(
+                    policy_cfg.state_predictor.process_covariance_diag
+                ),
+                "state_predictor_measurement_covariance_diag": list(
+                    policy_cfg.state_predictor.measurement_covariance_diag
+                ),
+                "state_predictor_initial_covariance_diag": list(
+                    policy_cfg.state_predictor.initial_covariance_diag
+                ),
+                "state_predictor_human_velocity_key": policy_cfg.state_predictor.human_velocity_key,
+                "state_predictor_human_velocity_sign": policy_cfg.state_predictor.human_velocity_sign,
+                "state_predictor_missing_human_velocity_policy": (
+                    policy_cfg.state_predictor.missing_human_velocity_policy
+                ),
+                "state_predictor_acceleration_response_model": (
+                    policy_cfg.state_predictor.acceleration_response_model
+                ),
+                "state_predictor_acceleration_response_source": (
+                    policy_cfg.state_predictor.acceleration_response_source
+                ),
+                "state_predictor_acceleration_response_tau_s": (
+                    policy_cfg.state_predictor.acceleration_response_tau_s
+                ),
+                "state_predictor_acceleration_response_gain": (
+                    policy_cfg.state_predictor.acceleration_response_gain
+                ),
+                "state_predictor_acceleration_response_bias": (
+                    policy_cfg.state_predictor.acceleration_response_bias
+                ),
+                "state_predictor_acceleration_response_noise_mode": (
+                    policy_cfg.state_predictor.acceleration_response_noise_mode
+                ),
+                "state_predictor_acceleration_response_noise_std": (
+                    policy_cfg.state_predictor.acceleration_response_noise_std
+                ),
+                "state_predictor_acceleration_response_ou_theta": (
+                    policy_cfg.state_predictor.acceleration_response_ou_theta
+                ),
+                "state_predictor_acceleration_response_noise_clip": (
+                    policy_cfg.state_predictor.acceleration_response_noise_clip
+                ),
+                "state_predictor_acceleration_response_max_abs_acc": (
+                    policy_cfg.state_predictor.acceleration_response_max_abs_acc
+                ),
                 "robustness": {
                     "enabled": bool(env_cfg.robustness.enabled),
                     "action_delay_enabled": bool(env_cfg.robustness.action_delay_enabled),

@@ -1,5 +1,5 @@
 task_name: target_position
-interface_name: velocity
+interface_name: acceleration
 
 env:
   seed: 666
@@ -16,40 +16,49 @@ target_position_task:
   goal_position_max: 0.60
   min_initial_goal_distance: 0.05
 
-velocity_interface:
-  max_acc: 0.5
-  max_velocity: 0.0
+acceleration_interface:
+  max_acc: 5.0
+  max_delta_acc: 0.5
 
 robustness:
   enabled: true
-  ball_mass_variation_enabled: true
-  ball_mass_range: [0.005, 0.03]
+  ball_mass_variation_enabled: false
+  ball_mass_range: [0.005, 0.05]
   recompute_ball_inertia: true
   controller_gain_variation_enabled: false
   controller_gain_range: [4.0, 8.0]
   action_delay_enabled: true
-  delay_step: 15
+  delay_step: 4
+  acceleration_response_enabled: true
+  acceleration_response_tau_s_range: [0.04, 0.06]
+  acceleration_response_gain_range: [1.05, 1.15]
+  acceleration_response_bias_range: [-0.20, -0.05]
+  acceleration_response_noise_mode: ou
+  acceleration_response_noise_std_range: [0.5, 0.8]
+  acceleration_response_ou_theta_range: [8.0, 16.0]
+  acceleration_response_noise_clip: 2.0
+  acceleration_response_max_abs_acc: 6.5
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0
   external_disturbance_ou_theta_range: [0.1, 0.3]
   external_disturbance_ou_sigma_range: [0.01, 0.05]
   external_disturbance_ou_clip: 0.1
   observation_degradation_enabled: false
-  obs_theta_noise_std: 0.0
-  obs_theta_outlier_prob: 0.0
-  obs_theta_outlier_std: 0.0
-  obs_theta_quantization: 0.0
+  obs_theta_noise_std: 0.001
+  obs_theta_outlier_prob: 0.02
+  obs_theta_outlier_std: 0.004
+  obs_theta_quantization: 0.0005
   obs_theta_delay_step: 0
   obs_theta_hold_prob: 0.0
-  obs_pb_noise_std: 0.0
-  obs_pb_outlier_prob: 0.0
-  obs_pb_outlier_std: 0.0
-  obs_pb_quantization: 0.0
+  obs_pb_noise_std: 0.001
+  obs_pb_outlier_prob: 0.01
+  obs_pb_outlier_std: 0.01
+  obs_pb_quantization: 0.001
   obs_pb_delay_step: 0
   obs_pb_hold_prob: 0.0
   observation_filter_enabled: false
-  obs_theta_filter_cutoff_hz: 0.0
-  obs_pb_filter_cutoff_hz: 0.0
+  obs_theta_filter_cutoff_hz: 1.0
+  obs_pb_filter_cutoff_hz: 2.0
 
 target_position_evaluator:
   episode_length_s: 10.0
@@ -64,5 +73,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/zero_action
-  run_name: zero_action_target_position
+  root_dir: logs/acceleration_response
+  run_name: target_position_acceleration_response_realistic

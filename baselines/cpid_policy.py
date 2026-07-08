@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import torch
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import VelocityModelStatePredictorCfg, make_velocity_state_predictor
 
 
 @dataclass
@@ -81,7 +81,7 @@ class CPIDPolicy(BasePolicy):
         self.step_dt = float(step_dt)
         self.max_vel_change = float(cfg.velocity_pid.max_acc) * self.step_dt
         self._resolve_predictor_cfg_defaults()
-        self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        self.state_predictor = make_velocity_state_predictor(cfg.state_predictor, num_envs, self.device)
 
         self.theta_ref = torch.zeros((self.num_envs, 1), device=self.device)
         self.error_prev1 = torch.zeros((self.num_envs, 1), device=self.device)
@@ -130,7 +130,6 @@ class CPIDPolicy(BasePolicy):
 
     def act(self, observations: dict[str, torch.Tensor] | torch.Tensor, extras: dict | None = None) -> torch.Tensor:
         """Compute the physical velocity increment action ``delta_vrz``."""
-        del extras
         raw_obs = self._extract_policy_observation(observations)
         if raw_obs.shape[-1] < 11:
             raise ValueError(f"CPIDPolicy expects an 11-D observation, got shape {tuple(raw_obs.shape)}.")
@@ -146,7 +145,7 @@ class CPIDPolicy(BasePolicy):
             self.error_prev1[init_envs] = self.raw_error[init_envs]
             self.error_prev2[init_envs] = self.raw_error[init_envs]
 
-        obs = self.state_predictor.predict(raw_obs, error_prev1=self.error_prev1)
+        obs = self.state_predictor.predict(raw_obs, error_prev1=self.error_prev1, extras=extras)
 
         current_theta = obs[:, ObservationIndex.THETA : ObservationIndex.THETA + 1]
 
@@ -230,6 +229,8 @@ class CPIDPolicy(BasePolicy):
             predictor_cfg.ball_mass = 0.0005
         if _is_auto(predictor_cfg.ball_radius):
             predictor_cfg.ball_radius = 0.023
+        if _is_auto(predictor_cfg.ball_position_offset):
+            predictor_cfg.ball_position_offset = 0.33
 
     def _angle_increment(self, error: torch.Tensor, error_dot: torch.Tensor, error_ddot: torch.Tensor) -> torch.Tensor:
         cfg = self.cfg.angle_pid

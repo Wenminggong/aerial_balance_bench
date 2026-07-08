@@ -34,6 +34,22 @@ robustness:
   external_disturbance_ou_theta_range: [0.1, 0.3]
   external_disturbance_ou_sigma_range: [0.01, 0.05]
   external_disturbance_ou_clip: 0.1
+  observation_degradation_enabled: false
+  obs_theta_noise_std: 0.0
+  obs_theta_outlier_prob: 0.0
+  obs_theta_outlier_std: 0.0
+  obs_theta_quantization: 0.0
+  obs_theta_delay_step: 0
+  obs_theta_hold_prob: 0.0
+  obs_pb_noise_std: 0.0
+  obs_pb_outlier_prob: 0.0
+  obs_pb_outlier_std: 0.0
+  obs_pb_quantization: 0.0
+  obs_pb_delay_step: 0
+  obs_pb_hold_prob: 0.0
+  observation_filter_enabled: false
+  obs_theta_filter_cutoff_hz: 0.0
+  obs_pb_filter_cutoff_hz: 0.0
 
 target_position_evaluator:
   episode_length_s: 5.0

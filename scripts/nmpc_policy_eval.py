@@ -244,6 +244,8 @@ def _resolve_policy_cfg_from_env(policy_cfg: NMPCPolicyCfg, env_cfg: AerialBalan
         predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
     if _is_auto(predictor_cfg.ball_mass):
         predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+    if _is_auto(predictor_cfg.ball_position_offset):
+        predictor_cfg.ball_position_offset = float(env_cfg.beam_block_offset + env_cfg.plank_slide_length)
 
 
 def _is_auto(value) -> bool:
@@ -387,7 +389,9 @@ def main():
                 "nmpc_max_acc": policy_cfg.max_acc,
                 "use_multiprocessing": policy_cfg.use_multiprocessing,
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,
+                "state_predictor_type": policy_cfg.state_predictor.type,
                 "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
+                "state_predictor_ball_position_offset": policy_cfg.state_predictor.ball_position_offset,
                 "run_config_path": str(run_config_path),
                 "env_config_path": str(env_config_path),
                 "policy_config_path": str(policy_config_path),

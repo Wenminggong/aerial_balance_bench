@@ -2,9 +2,10 @@
 """Offline PX4 vertical action-delay identification.
 
 The script reads data collected by ``px4_action_delay_test.py`` and estimates
-one effective command delay for each trial.  It then groups the estimates by
-control mode and saves per-file results, mode-level statistics, and a comparison
-plot.
+one effective command delay for each trial.  It also accepts real-world
+acceleration-balancing logs that expose the same command/response semantics with
+deployment-specific field names.  It then groups the estimates by control mode
+and saves per-file results, mode-level statistics, and a comparison plot.
 """
 
 from __future__ import annotations
@@ -475,6 +476,30 @@ def is_beam_system_data(data: dict[str, np.ndarray], path: Path) -> bool:
     return "beam" in system_type
 
 
+def is_real_world_acceleration_balance_data(data: dict[str, np.ndarray], path: Path) -> bool:
+    if "desired_arz_up" in data and (
+        "actual_arz_up" in data or "actual_az_ned" in data or "obs_arz" in data
+    ):
+        return True
+
+    metadata = load_metadata(path)
+    node = str(metadata.get("node", "")).lower()
+    if "acceleration" not in node:
+        return False
+    return "desired_arz_up" in data or "policy_arz_cmd" in data
+
+
+def phase_mask(data: dict[str, np.ndarray], length: int, *, allow_balance: bool) -> np.ndarray | None:
+    if "phase" not in data:
+        return None
+    phase = np.asarray(data["phase"], dtype=str)
+    if len(phase) != length:
+        return None
+    if allow_balance:
+        return np.isin(phase, ("excitation", "balance"))
+    return phase == "excitation"
+
+
 def select_signal(
     candidates: Iterable[tuple[str, np.ndarray | None]],
     min_samples: int,
@@ -504,6 +529,7 @@ def build_signal_set(
     response_target: str,
 ) -> SignalSet:
     mode = infer_control_mode(data, path)
+    real_world_acceleration_balance = is_real_world_acceleration_balance_data(data, path)
     time = as_float_array(data, "t_trial")
     if time is None:
         t_ros = as_float_array(data, "t_ros")
@@ -516,9 +542,15 @@ def build_signal_set(
     vel_sp_z = as_float_array(data, "vel_sp_z")
     acc_sp_z = as_float_array(data, "acc_sp_z")
     thrust_norm = as_float_array(data, "thrust_norm")
+    desired_arz_up = as_float_array(data, "desired_arz_up")
+    policy_arz_cmd = as_float_array(data, "policy_arz_cmd")
+    published_acc_z_ned = as_float_array(data, "published_acc_z_ned")
     z = as_float_array(data, "z")
     vz = as_float_array(data, "vz")
     az = as_float_array(data, "az")
+    actual_arz_up = as_float_array(data, "actual_arz_up")
+    actual_az_ned = as_float_array(data, "actual_az_ned")
+    obs_arz = as_float_array(data, "obs_arz")
     beam_theta_rel = as_float_array(data, "beam_theta_rel")
     beam_theta = as_float_array(data, "beam_theta")
 
@@ -543,12 +575,20 @@ def build_signal_set(
     elif mode == "acceleration":
         input_signal, command = select_signal(
             (
+                ("desired_arz_up", desired_arz_up),
+                ("policy_arz_cmd", policy_arz_cmd),
+                ("published_acc_up_from_neg_published_acc_z_ned", negate(published_acc_z_ned)),
                 ("cmd_up", cmd_up),
                 ("acc_sp_up_from_neg_acc_sp_z", negate(acc_sp_z)),
             ),
             min_samples,
         )
-        drone_response_candidates = (("acceleration_up_from_neg_az", negate(az)),)
+        drone_response_candidates = (
+            ("actual_arz_up", actual_arz_up),
+            ("acceleration_up_from_neg_actual_az_ned", negate(actual_az_ned)),
+            ("obs_arz", obs_arz),
+            ("acceleration_up_from_neg_az", negate(az)),
+        )
     elif mode == "thrust":
         input_signal, command = select_signal(
             (
@@ -557,7 +597,12 @@ def build_signal_set(
             ),
             min_samples,
         )
-        drone_response_candidates = (("acceleration_up_from_neg_az", negate(az)),)
+        drone_response_candidates = (
+            ("actual_arz_up", actual_arz_up),
+            ("acceleration_up_from_neg_actual_az_ned", negate(actual_az_ned)),
+            ("obs_arz", obs_arz),
+            ("acceleration_up_from_neg_az", negate(az)),
+        )
     else:
         raise ValueError(f"unsupported control mode: {mode}")
 
@@ -576,10 +621,9 @@ def build_signal_set(
         response_signal, response = select_signal(drone_response_candidates, min_samples)
 
     mask = np.isfinite(time) & np.isfinite(command) & np.isfinite(response)
-    if "phase" in data:
-        phase = np.asarray(data["phase"], dtype=str)
-        if len(phase) == len(mask):
-            mask &= phase == "excitation"
+    valid_phase = phase_mask(data, len(mask), allow_balance=real_world_acceleration_balance)
+    if valid_phase is not None:
+        mask &= valid_phase
     if not include_unsafe and "safety_state" in data:
         safety_state = np.asarray(data["safety_state"], dtype=str)
         if len(safety_state) == len(mask):
@@ -599,7 +643,11 @@ def build_signal_set(
     if len(time) < min_samples:
         raise ValueError(f"only {len(time)} samples after resampling/trimming")
 
-    excitation_type = first_string(data, "excitation_type", default="unknown")
+    excitation_type = first_string(
+        data,
+        "excitation_type",
+        default="balance" if real_world_acceleration_balance else "unknown",
+    )
     return SignalSet(
         mode=mode,
         time_s=time,

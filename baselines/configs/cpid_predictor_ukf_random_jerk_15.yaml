@@ -1,0 +1,41 @@
+policy_name: cpid
+
+angle_pid:
+  kp: 0.5
+  ti: 1.5
+  td: 0.6
+  max_theta_change: 0.001745329252
+
+velocity_pid:
+  kp: 10.0
+  ti: 1000.0
+  td: 0.0
+  max_acc: 0.5
+
+state_predictor:
+  type: ukf_random_jerk
+  enabled: true
+  delay_step: 15
+  solver: rk4
+  step_dt: auto
+  max_acc: auto
+  max_velocity: auto
+  plank_length: auto
+  rope_length: auto
+  gravity: auto
+  ball_mass: 0.0005
+  ball_radius: auto
+  ball_inertia_ratio: 0.4
+  ball_position_offset: auto
+  epsilon: 1.0e-9
+  ukf_random_jerk:
+    lambda_j: 1.0
+    alpha: 1.0e-3
+    beta: 2.0
+    kappa: 0.0
+    process_covariance_diag: [1.0e-5, 1.0e-3, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2]
+    measurement_covariance_diag: [1.0e-6, 1.0e-4, 1.0e-6, 1.0e-3, 1.0e-2]
+    initial_covariance_diag: [1.0e-5, 1.0e-3, 1.0e-5, 1.0e-2, 1.0e-1, 1.0e-1]
+    human_velocity_key: external_disturbance_vel_z
+    human_velocity_sign: 1.0
+    missing_human_velocity_policy: zero

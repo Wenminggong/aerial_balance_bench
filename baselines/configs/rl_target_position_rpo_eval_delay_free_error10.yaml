@@ -1,0 +1,13 @@
+env_config: environments/configs/template_eval_delay_free.yaml
+policy_config: baselines/configs/rl_rpo_error10.yaml
+checkpoint_path: null
+
+runner:
+  target_episodes: 500
+  max_steps: null
+  render: false
+  save_rollout: true
+
+logging:
+  root_dir: logs/rl/rpo_results/delay_free_error10
+  run_name: rpo_target_position_error10_eval_delay_free

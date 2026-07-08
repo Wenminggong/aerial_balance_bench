@@ -1,10 +1,10 @@
 task_name: target_position
-interface_name: velocity
+interface_name: acceleration
 
 env:
   seed: 666
-  num_envs: 500
-  episode_length_s: 10.0
+  num_envs: 1024
+  episode_length_s: 5.0
   device: cuda:0
 
 target_position_task:
@@ -16,23 +16,39 @@ target_position_task:
   goal_position_max: 0.60
   min_initial_goal_distance: 0.05
 
-velocity_interface:
-  max_acc: 0.5
-  max_velocity: 0.0
+  position_weight: 8.0
+  ball_velocity_weight: 2.0
+  command_weight: 2.0
+  action_weight: 4.0
+  action_smoothness_weight: 1.0
+  theta_weight: 10.0
+  omega_weight: 0.5
+
+  failure_penalty: 500.0
+  goal_bonus: 3.0
+  goal_radius: 0.05
+  goal_position_decay: 100.0
+  goal_velocity_decay: 2.0
+  max_error_for_failure: 0.7
+
+acceleration_interface:
+  max_acc: 5.0
+  max_delta_acc: 0.5
 
 robustness:
   enabled: true
-  ball_mass_variation_enabled: true
-  ball_mass_range: [0.005, 0.03]
+  ball_mass_variation_enabled: false
+  ball_mass_range: [0.005, 0.05]
   recompute_ball_inertia: true
   controller_gain_variation_enabled: false
   controller_gain_range: [4.0, 8.0]
   action_delay_enabled: true
-  delay_step: 15
+  delay_step: 4
+  delay_step_choices: []
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0
   external_disturbance_ou_theta_range: [0.1, 0.3]
-  external_disturbance_ou_sigma_range: [0.01, 0.05]
+  external_disturbance_ou_sigma_range: [0.0, 0.05]
   external_disturbance_ou_clip: 0.1
   observation_degradation_enabled: false
   obs_theta_noise_std: 0.0
@@ -52,8 +68,8 @@ robustness:
   obs_pb_filter_cutoff_hz: 0.0
 
 target_position_evaluator:
-  episode_length_s: 10.0
-  num_eval_episodes: 500
+  episode_length_s: 5.0
+  num_eval_episodes: 1024
   target_zone: 0.01
   steady_state_window_s: 1.0
 
@@ -65,4 +81,4 @@ runner:
 
 logging:
   root_dir: logs/zero_action
-  run_name: zero_action_target_position
+  run_name: zero_action_target_position_acceleration_reward_shaping

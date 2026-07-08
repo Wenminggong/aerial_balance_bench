@@ -12,7 +12,11 @@ import torch
 from gymnasium import spaces
 
 from .base_policy import BasePolicy, BasePolicyCfg
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import (
+    VelocityModelStatePredictorCfg,
+    make_acceleration_state_predictor,
+    make_velocity_state_predictor,
+)
 from .rl_models import MLPNetworkCfg, make_agent_class_and_cfg, make_models
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
 
@@ -28,6 +32,7 @@ class RLPolicyCfg(BasePolicyCfg):
     load_checkpoint: bool = True
     deterministic: bool = True
     physical_action_limit: float | str = "auto"
+    command_history_length: int | str = 0
     network: MLPNetworkCfg = field(default_factory=MLPNetworkCfg)
     agent: dict[str, Any] = field(default_factory=dict)
     state_predictor: VelocityModelStatePredictorCfg = field(default_factory=VelocityModelStatePredictorCfg)
@@ -57,11 +62,75 @@ class RLPolicyCfg(BasePolicyCfg):
             cfg.deterministic = bool(policy_data["deterministic"])
         if "physical_action_limit" in policy_data:
             cfg.physical_action_limit = policy_data["physical_action_limit"]
+        if "command_history_length" in policy_data:
+            cfg.command_history_length = policy_data["command_history_length"]
+        elif "action_history_length" in policy_data:
+            cfg.command_history_length = policy_data["action_history_length"]
 
         cfg.network = MLPNetworkCfg.from_dict(policy_data.get("network", policy_data.get("model", {})))
         cfg.agent = dict(policy_data.get("agent", {}))
         cfg.state_predictor = VelocityModelStatePredictorCfg.from_dict(policy_data.get("state_predictor", {}))
         return cfg
+
+
+class _IdentityStatePredictor:
+    """No-op state predictor for interfaces without policy-side compensation."""
+
+    def __init__(self, num_envs: int, device: str | torch.device):
+        self.num_envs = int(num_envs)
+        self.device = torch.device(device)
+        self.predicted_observation = torch.zeros((self.num_envs, 11), device=self.device)
+        self.last_action = torch.zeros((self.num_envs, 1), device=self.device)
+
+    @property
+    def active(self) -> bool:
+        return False
+
+    def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None):
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        else:
+            env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+        if env_ids.numel() == 0:
+            return
+        self.predicted_observation[env_ids] = 0.0
+        self.last_action[env_ids] = 0.0
+
+    def predict(
+        self,
+        observation: torch.Tensor,
+        error_prev1: torch.Tensor | None = None,
+        extras: Mapping | None = None,
+    ) -> torch.Tensor:
+        del error_prev1, extras
+        observation = observation.to(device=self.device, dtype=torch.float32)
+        if observation.shape != (self.num_envs, 11):
+            raise ValueError(
+                f"IdentityStatePredictor expects observation shape ({self.num_envs}, 11), "
+                f"got {tuple(observation.shape)}."
+            )
+        self.predicted_observation.copy_(observation)
+        return observation
+
+    def update_after_action(self, action: torch.Tensor):
+        action = action.to(device=self.device, dtype=torch.float32)
+        if action.ndim == 1:
+            action = action.unsqueeze(-1)
+        if action.shape == (self.num_envs, 1):
+            self.last_action.copy_(action)
+
+    def get_state(self) -> dict[str, torch.Tensor]:
+        return {
+            "policy_predictor_enabled": torch.zeros((self.num_envs,), device=self.device),
+        }
+
+    def to(self, device: str | torch.device):
+        device = torch.device(device)
+        for name, value in vars(self).items():
+            if isinstance(value, torch.Tensor):
+                setattr(self, name, value.to(device=device))
+        self.device = device
+        return self
 
 
 class RLPolicy(BasePolicy):
@@ -76,19 +145,28 @@ class RLPolicy(BasePolicy):
         device: str | torch.device,
         step_dt: float,
         physical_action_limit: float,
+        interface_name: str = "velocity",
     ):
         super().__init__(cfg, num_envs, device)
+        self.interface_name = str(interface_name).lower()
         self.step_dt = float(step_dt)
         self.physical_action_limit = float(physical_action_limit)
+        if self.interface_name not in {"velocity", "acceleration"}:
+            raise ValueError("RLPolicy supports only interface_name='velocity' or 'acceleration'.")
         if self.step_dt <= 0.0:
             raise ValueError("RLPolicy requires a positive step_dt.")
         if self.physical_action_limit <= 0.0:
             raise ValueError("RLPolicy requires a positive physical_action_limit.")
 
         self._resolve_predictor_cfg_defaults()
-        adapter_cfg = RLObservationAdapterCfg(observation_mode=cfg.observation_mode)
+        adapter_cfg = RLObservationAdapterCfg(
+            observation_mode=cfg.observation_mode,
+            command_history_length=cfg.command_history_length,
+        )
         self.observation_adapter = RLObservationAdapter(adapter_cfg, num_envs, self.device)
-        self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        if self.observation_adapter.command_history_length > 0 and self.interface_name != "acceleration":
+            raise ValueError("observation_mode='error9_acc_history' is supported only with interface_name='acceleration'.")
+        self.state_predictor = self._make_state_predictor()
 
         self.normalized_action_space = spaces.Box(
             low=np.array([-1.0], dtype=np.float32),
@@ -134,6 +212,7 @@ class RLPolicy(BasePolicy):
         self.policy_input = torch.zeros((self.num_envs, self.observation_adapter.input_dim), device=self.device)
         self.normalized_action = torch.zeros((self.num_envs, 1), device=self.device)
         self.physical_action = torch.zeros((self.num_envs, 1), device=self.device)
+        self.command_z = torch.zeros((self.num_envs, 1), device=self.device)
 
     @property
     def observation_mode(self) -> str:
@@ -148,18 +227,18 @@ class RLPolicy(BasePolicy):
         self.state_predictor.reset(env_ids)
         self.normalized_action[env_ids] = 0.0
         self.physical_action[env_ids] = 0.0
+        self.command_z[env_ids] = 0.0
         self.policy_input[env_ids] = 0.0
         if env_ids.numel() == self.num_envs:
             self.timestep = 0
 
     def act(self, observations: dict[str, torch.Tensor] | torch.Tensor, extras: dict | None = None) -> torch.Tensor:
-        """Compute a physical velocity-increment action from environment observations."""
-        del extras
+        """Compute a physical high-level action from environment observations."""
         raw_obs = self._extract_policy_observation(observations)
         if raw_obs.shape != (self.num_envs, 11):
             raise ValueError(f"RLPolicy expects observation shape ({self.num_envs}, 11), got {tuple(raw_obs.shape)}.")
 
-        model_obs = self.state_predictor.predict(raw_obs)
+        model_obs = self.state_predictor.predict(raw_obs, extras=extras)
         self.policy_input.copy_(self.observation_adapter.transform(model_obs, update_history=True))
 
         outputs = self.agent.act(self.policy_input, timestep=self.timestep, timesteps=self.timestep)
@@ -167,6 +246,7 @@ class RLPolicy(BasePolicy):
         del info
         self.normalized_action.copy_(torch.clamp(action, -1.0, 1.0))
         self.physical_action.copy_(self.normalized_action * self.physical_action_limit)
+        self._update_command_history_after_action()
         self.state_predictor.update_after_action(self.physical_action)
         self.timestep += 1
         return self.physical_action.clone()
@@ -176,6 +256,7 @@ class RLPolicy(BasePolicy):
         state = {
             "rl_normalized_action": self.normalized_action[:, 0],
             "rl_physical_action": self.physical_action[:, 0],
+            "rl_policy_command_z": self.command_z[:, 0],
             **self.observation_adapter.get_state(),
             **self.state_predictor.get_state(),
         }
@@ -206,8 +287,44 @@ class RLPolicy(BasePolicy):
             raise ValueError(f"RLPolicy expected normalized action shape ({self.num_envs}, 1), got {tuple(action.shape)}.")
         return action, info
 
+    def _update_command_history_after_action(self):
+        if self.observation_adapter.command_history_length <= 0:
+            return
+        max_acc = float(self.cfg.state_predictor.max_acc)
+        if max_acc <= 0.0:
+            raise ValueError("error9_acc_history requires a positive acceleration command limit.")
+        next_command_z = self.command_z + self.physical_action
+        self.command_z.copy_(torch.clamp(next_command_z, min=-max_acc, max=max_acc))
+        self.observation_adapter.update_command_history(self.command_z)
+
     def _resolve_predictor_cfg_defaults(self):
         predictor_cfg = self.cfg.state_predictor
+        if self.interface_name == "acceleration":
+            if _is_auto(predictor_cfg.delay_step):
+                predictor_cfg.delay_step = 0
+            if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
+                predictor_cfg.step_dt = self.step_dt
+            if _is_auto(predictor_cfg.max_delta_acc) or float(predictor_cfg.max_delta_acc) <= 0.0:
+                predictor_cfg.max_delta_acc = self.physical_action_limit
+            if _is_auto(predictor_cfg.max_acc) or float(predictor_cfg.max_acc) <= 0.0:
+                predictor_cfg.max_acc = 5.0
+            if _is_auto(predictor_cfg.max_velocity):
+                predictor_cfg.max_velocity = 0.0
+            if _is_auto(predictor_cfg.plank_length):
+                predictor_cfg.plank_length = 1.06
+            if _is_auto(predictor_cfg.rope_length):
+                predictor_cfg.rope_length = 0.9
+            if _is_auto(predictor_cfg.gravity):
+                predictor_cfg.gravity = 9.81
+            if _is_auto(predictor_cfg.ball_mass):
+                predictor_cfg.ball_mass = 0.0005
+            if _is_auto(predictor_cfg.ball_radius):
+                predictor_cfg.ball_radius = 0.023
+            if _is_auto(predictor_cfg.ball_position_offset):
+                predictor_cfg.ball_position_offset = 0.33
+            self._resolve_acceleration_response_cfg_defaults(predictor_cfg)
+            return
+
         if _is_auto(predictor_cfg.delay_step):
             predictor_cfg.delay_step = 0
         if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
@@ -226,6 +343,33 @@ class RLPolicy(BasePolicy):
             predictor_cfg.ball_mass = 0.0005
         if _is_auto(predictor_cfg.ball_radius):
             predictor_cfg.ball_radius = 0.023
+        if _is_auto(predictor_cfg.ball_position_offset):
+            predictor_cfg.ball_position_offset = 0.33
+
+    def _resolve_acceleration_response_cfg_defaults(self, predictor_cfg):
+        if _is_auto(predictor_cfg.acceleration_response_tau_s):
+            predictor_cfg.acceleration_response_tau_s = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_gain):
+            predictor_cfg.acceleration_response_gain = 1.0
+        if _is_auto(predictor_cfg.acceleration_response_bias):
+            predictor_cfg.acceleration_response_bias = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_noise_mode):
+            predictor_cfg.acceleration_response_noise_mode = "none"
+        if _is_auto(predictor_cfg.acceleration_response_noise_std):
+            predictor_cfg.acceleration_response_noise_std = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_ou_theta):
+            predictor_cfg.acceleration_response_ou_theta = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_noise_clip):
+            predictor_cfg.acceleration_response_noise_clip = 0.0
+        if _is_auto(predictor_cfg.acceleration_response_max_abs_acc):
+            predictor_cfg.acceleration_response_max_abs_acc = 0.0
+
+    def _make_state_predictor(self):
+        if self.interface_name == "velocity":
+            return make_velocity_state_predictor(self.cfg.state_predictor, self.num_envs, self.device)
+        if bool(self.cfg.state_predictor.enabled):
+            return make_acceleration_state_predictor(self.cfg.state_predictor, self.num_envs, self.device)
+        return _IdentityStatePredictor(self.num_envs, self.device)
 
 
 def _is_auto(value) -> bool:

@@ -35,6 +35,7 @@ def _parse_args():
     parser.add_argument("--seed", type=int, default=None, help="Override random seed. Use -1 for a random seed.")
     parser.add_argument("--max_iterations", type=int, default=None, help="Override training iterations.")
     parser.add_argument("--run_name", type=str, default=None, help="Override log run name.")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Warm-start training from a skrl agent checkpoint.")
     parser.add_argument("--video", action="store_true", default=False, help="Record training video.")
     AppLauncher.add_app_launcher_args(parser)
     args_cli = parser.parse_args()
@@ -159,8 +160,40 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
 def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
     if env_cfg.task_name != "target_position":
         raise ValueError("RL training currently supports only task_name='target_position'.")
-    if env_cfg.interface_name != "velocity":
-        raise ValueError("RL training currently supports only interface_name='velocity'.")
+    if env_cfg.interface_name not in {"velocity", "acceleration"}:
+        raise ValueError("RL training currently supports interface_name='velocity' or 'acceleration'.")
+
+
+def _resolve_command_history_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg):
+    history_mode = policy_cfg.observation_mode == "error9_acc_history"
+    delay_choices = tuple(int(value) for value in (env_cfg.robustness.delay_step_choices or ()))
+    if history_mode and delay_choices:
+        raise ValueError("observation_mode='error9_acc_history' currently supports only fixed delay_step.")
+
+    if isinstance(policy_cfg.command_history_length, str):
+        if policy_cfg.command_history_length.lower() != "auto":
+            policy_cfg.command_history_length = int(policy_cfg.command_history_length)
+        elif history_mode:
+            if not (env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled):
+                raise ValueError(
+                    "command_history_length='auto' with observation_mode='error9_acc_history' "
+                    "requires fixed action delay to be enabled."
+                )
+            policy_cfg.command_history_length = int(env_cfg.robustness.delay_step)
+        else:
+            policy_cfg.command_history_length = 0
+    else:
+        policy_cfg.command_history_length = int(policy_cfg.command_history_length)
+
+    if int(policy_cfg.command_history_length) < 0:
+        raise ValueError("command_history_length must be non-negative.")
+    if history_mode:
+        if env_cfg.interface_name != "acceleration":
+            raise ValueError("observation_mode='error9_acc_history' requires interface_name='acceleration'.")
+        if int(policy_cfg.command_history_length) <= 0:
+            raise ValueError("observation_mode='error9_acc_history' requires command_history_length > 0.")
+    elif int(policy_cfg.command_history_length) != 0:
+        raise ValueError("command_history_length is only supported with observation_mode='error9_acc_history'.")
 
 
 def _deep_update(target: dict, values: dict):
@@ -179,6 +212,32 @@ def _make_output_dir(run_config: dict[str, Any], seed: int) -> Path:
     else:
         run_name = logging_cfg.get("run_name", f"rl_train_seed_{seed}")
     return ensure_dir(root_dir / run_name)
+
+
+def _resolve_checkpoint_path(
+    path: str | Path | None,
+    run_config: dict[str, Any],
+    policy_config_dir: Path,
+) -> str | None:
+    raw = args_cli.checkpoint or run_config.get("checkpoint_path") or path
+    if raw in (None, "", "null"):
+        return None
+    raw_path = Path(raw).expanduser()
+    if raw_path.is_absolute():
+        return str(raw_path.resolve())
+    for root in (PROJECT_ROOT, policy_config_dir):
+        candidate = (root / raw_path).resolve()
+        if candidate.exists():
+            return str(candidate)
+    return str((PROJECT_ROOT / raw_path).resolve())
+
+
+def _should_load_checkpoint(run_config: dict[str, Any], policy_cfg: RLPolicyCfg) -> bool:
+    if args_cli.checkpoint not in (None, "", "null"):
+        return True
+    if run_config.get("checkpoint_path") not in (None, "", "null"):
+        return True
+    return bool(policy_cfg.load_checkpoint)
 
 
 def main():
@@ -205,6 +264,21 @@ def main():
     effective_policy_config = dict(policy_config)
     _deep_update(effective_policy_config, run_config.get("policy_overrides", {}))
     policy_cfg = RLPolicyCfg.from_dict(effective_policy_config)
+    resolved_checkpoint_path = _resolve_checkpoint_path(
+        policy_cfg.checkpoint_path,
+        run_config,
+        policy_config_path.parent,
+    )
+    load_checkpoint = _should_load_checkpoint(run_config, policy_cfg)
+    if load_checkpoint:
+        if not resolved_checkpoint_path:
+            raise ValueError(
+                "RL training load_checkpoint=True requires a checkpoint path. "
+                "Set --checkpoint, run_config.checkpoint_path, or policy_config.checkpoint_path."
+            )
+        checkpoint_path_obj = Path(resolved_checkpoint_path)
+        if not checkpoint_path_obj.is_file():
+            raise FileNotFoundError(f"RL training checkpoint does not exist: {resolved_checkpoint_path}")
 
     seed = _resolve_seed(run_config, env_config)
     random.seed(seed)
@@ -214,6 +288,7 @@ def main():
 
     env_cfg = _build_env_cfg(env_config, seed)
     _validate_env_cfg(env_cfg)
+    _resolve_command_history_cfg_from_env(policy_cfg, env_cfg)
     train_cfg = run_config.get("training", {})
     max_iterations = int(args_cli.max_iterations if args_cli.max_iterations is not None else train_cfg.get("max_iterations", 200))
 
@@ -237,7 +312,10 @@ def main():
 
         base_env = env.unwrapped
         physical_action_limit = float(base_env.action_space.high[0])
-        adapter_cfg = RLObservationAdapterCfg(observation_mode=policy_cfg.observation_mode)
+        adapter_cfg = RLObservationAdapterCfg(
+            observation_mode=policy_cfg.observation_mode,
+            command_history_length=policy_cfg.command_history_length,
+        )
         train_env = NormalizedRLTrainingWrapper(env, adapter_cfg, physical_action_limit)
         skrl_env = wrap_env(env=train_env, wrapper="isaaclab", verbose=True)
 
@@ -301,6 +379,17 @@ def main():
             action_space=skrl_env.action_space,
             device=skrl_env.device,
         )
+        if load_checkpoint:
+            try:
+                agent.load(resolved_checkpoint_path)
+                print(f"[INFO] Warm-started RL training from checkpoint: {resolved_checkpoint_path}")
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to load RL training checkpoint. Check that the checkpoint matches "
+                    f"algorithm={policy_cfg.algorithm!r}, observation_mode={policy_cfg.observation_mode!r}, "
+                    f"policy_input_dim={train_env.adapter.input_dim}, interface_name={env_cfg.interface_name!r}."
+                ) from exc
+
         trainer_cfg = {
             "timesteps": int(train_cfg.get("timesteps", max_iterations * base_env.max_episode_length)),
             "headless": bool(args_cli.headless),
@@ -316,10 +405,16 @@ def main():
                 "algorithm": policy_cfg.algorithm,
                 "observation_mode": policy_cfg.observation_mode,
                 "policy_input_dim": train_env.adapter.input_dim,
+                "policy_input_fields": list(train_env.adapter.field_names),
+                "command_history_length": int(policy_cfg.command_history_length),
                 "physical_action_limit": physical_action_limit,
                 "max_iterations": max_iterations,
                 "trainer_timesteps": trainer_cfg["timesteps"],
                 "wandb_project": default_overrides["experiment"]["wandb_kwargs"]["project"],
+                "load_checkpoint": load_checkpoint,
+                "loaded_checkpoint_path": resolved_checkpoint_path if load_checkpoint else None,
+                "resume_mode": "warm_start_agent" if load_checkpoint else "fresh",
+                "resume_note": "trainer timesteps start from zero for this run" if load_checkpoint else None,
                 "run_config_path": str(run_config_path),
                 "env_config_path": str(env_config_path),
                 "policy_config_path": str(policy_config_path),

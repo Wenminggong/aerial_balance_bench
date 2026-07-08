@@ -8,7 +8,15 @@ from .cpid_acceleration_policy import (
     AccelerationPIDCfg,
 )
 from .cpid_policy import AnglePIDCfg, CPIDPolicy, CPIDPolicyCfg, VelocityPIDCfg
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import (
+    AccelerationModelStatePredictor,
+    UKFJerkHumanAccelerationStatePredictor,
+    UKFJerkHumanVelocityStatePredictor,
+    VelocityModelStatePredictor,
+    VelocityModelStatePredictorCfg,
+    make_acceleration_state_predictor,
+    make_velocity_state_predictor,
+)
 from .nmpc_policy import NMPCPolicy, NMPCPolicyCfg
 from .rl_models import MLPNetworkCfg
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
@@ -20,6 +28,7 @@ __all__ = [
     "AccelerationCPIDPolicyCfg",
     "AccelerationPIDCfg",
     "AnglePIDCfg",
+    "AccelerationModelStatePredictor",
     "BasePolicy",
     "BasePolicyCfg",
     "CPIDPolicy",
@@ -33,6 +42,10 @@ __all__ = [
     "RLPolicy",
     "RLPolicyCfg",
     "VelocityPIDCfg",
+    "UKFJerkHumanAccelerationStatePredictor",
+    "UKFJerkHumanVelocityStatePredictor",
     "VelocityModelStatePredictor",
     "VelocityModelStatePredictorCfg",
+    "make_acceleration_state_predictor",
+    "make_velocity_state_predictor",
 ]

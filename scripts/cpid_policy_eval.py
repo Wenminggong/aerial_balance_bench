@@ -183,6 +183,15 @@ POLICY_EXTRA_FIELDS = (
     "policy_predictor_error",
     "policy_predictor_error_dot",
     "policy_predictor_error_ddot",
+    "policy_predictor_type_id",
+    "policy_ukf_estimated_v_hz",
+    "policy_ukf_estimated_a_hz",
+    "policy_ukf_estimated_j_hz",
+    "policy_ukf_measured_v_hz",
+    "policy_ukf_human_velocity_valid",
+    "policy_ukf_covariance_trace",
+    "policy_ukf_innovation_norm",
+    "policy_ukf_omega_residual",
 )
 
 
@@ -281,6 +290,8 @@ def _resolve_predictor_cfg_from_env(policy_cfg: CPIDPolicyCfg, env_cfg: AerialBa
         predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
     if _is_auto(predictor_cfg.ball_mass):
         predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+    if _is_auto(predictor_cfg.ball_position_offset):
+        predictor_cfg.ball_position_offset = float(env_cfg.beam_block_offset + env_cfg.plank_slide_length)
 
 
 def _is_auto(value) -> bool:
@@ -412,8 +423,10 @@ def main():
                 "policy_name": policy_cfg.name,
                 "policy_step_dt": base_env.step_dt,
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,
+                "state_predictor_type": policy_cfg.state_predictor.type,
                 "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
                 "state_predictor_solver": policy_cfg.state_predictor.solver,
+                "state_predictor_ball_position_offset": policy_cfg.state_predictor.ball_position_offset,
                 "observation_fields": OBSERVATION_FIELDS,
             },
             output_dir / "resolved_run.yaml",

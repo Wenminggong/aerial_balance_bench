@@ -46,11 +46,6 @@ class AerialBalanceEnvCfg(DirectRLEnvCfg):
     episode_length_s: float = 10.0
     seed: int = 2025
 
-    # physics_cfg: PhysxCfg = PhysxCfg(
-    #     solver_type=0,
-    #     min_position_iteration_count=128,
-    #     min_velocity_iteration_count=32,
-    # )
     physics_cfg: PhysxCfg = PhysxCfg(
         solver_type=0,
         min_position_iteration_count=255,
@@ -249,6 +244,7 @@ class AerialBalanceEnv(DirectRLEnv):
             ],
             dim=-1,
         )
+        obs = self.robustness.corrupt_observation(self, obs)
         return {"policy": obs}
 
     def _get_rewards(self):

@@ -24,6 +24,9 @@ class TargetPositionTaskCfg:
     ball_velocity_weight: float = 0.5
     command_weight: float = 0.5
     action_weight: float = 1.0
+    action_smoothness_weight: float = 0.0
+    theta_weight: float = 0.0
+    omega_weight: float = 0.0
     failure_penalty: float = 500.0
     goal_bonus: float = 5.0
     goal_radius: float = 0.05
@@ -42,6 +45,7 @@ class TargetPositionTask:
         self.goal_position = torch.full((num_envs,), cfg.fixed_goal_position, device=self.device)
         self.reference_velocity = torch.zeros(num_envs, device=self.device)
         self.initial_ball_position = torch.zeros(num_envs, device=self.device)
+        self.previous_action_z = torch.zeros(num_envs, device=self.device)
 
     def sample_reset(self, env, env_ids: Sequence[int] | torch.Tensor):
         """Sample target-position task state and reset the ball on the beam."""
@@ -77,6 +81,7 @@ class TargetPositionTask:
         self.goal_position[env_ids] = goal
         self.reference_velocity[env_ids] = 0.0
         self.initial_ball_position[env_ids] = ball_position
+        self.previous_action_z[env_ids] = 0.0
         env.set_ball_position_along_beam(env_ids, ball_position)
 
     def get_reference(self, step: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
@@ -94,14 +99,19 @@ class TargetPositionTask:
         error = state["pb"] - self.goal_position
         ball_velocity = state["vb"]
         theta = state["theta"]
+        omega = state["omega"]
         command_z = command["command_z"]
         action_z = action.squeeze(-1)
+        action_delta_z = action_z - self.previous_action_z
 
         object_reward = -self.cfg.position_weight * error.square()
         object_reward -= self.cfg.ball_velocity_weight * ball_velocity.square()
 
         control_reward = -self.cfg.command_weight * command_z.square()
         control_reward -= self.cfg.action_weight * action_z.square()
+        control_reward -= self.cfg.action_smoothness_weight * action_delta_z.square()
+        control_reward -= self.cfg.theta_weight * theta.square()
+        control_reward -= self.cfg.omega_weight * omega.square()
 
         if terminated is None:
             failure_mask = (torch.abs(theta) > state["theta_limit"]) | (
@@ -116,6 +126,7 @@ class TargetPositionTask:
         goal_reward *= torch.exp(-self.cfg.goal_velocity_decay * torch.abs(ball_velocity))
         goal_reward = goal_reward * near_goal.float()
 
+        self.previous_action_z.copy_(action_z.detach())
         return object_reward + control_reward + failure_reward + goal_reward
 
     def compute_task_dones(self, state: dict[str, torch.Tensor]) -> torch.Tensor:
