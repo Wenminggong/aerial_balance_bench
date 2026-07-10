@@ -47,15 +47,24 @@ state_predictor:
   ball_inertia_ratio: 0.4
   epsilon: 1.0e-9
   acceleration_response_model: deterministic
-  acceleration_response_source: extras_or_config
-  acceleration_response_tau_s: auto
-  acceleration_response_gain: auto
-  acceleration_response_bias: auto
-  acceleration_response_noise_mode: auto
-  acceleration_response_noise_std: auto
-  acceleration_response_ou_theta: auto
-  acceleration_response_noise_clip: auto
-  acceleration_response_max_abs_acc: auto
+  # acceleration_response_source: extras_or_config
+  # acceleration_response_tau_s: auto
+  # acceleration_response_gain: auto
+  # acceleration_response_bias: auto
+  # acceleration_response_noise_mode: auto
+  # acceleration_response_noise_std: auto
+  # acceleration_response_ou_theta: auto
+  # acceleration_response_noise_clip: auto
+  # acceleration_response_max_abs_acc: auto
+  acceleration_response_source: config
+  acceleration_response_tau_s: 0.02
+  acceleration_response_gain: 1.05
+  acceleration_response_bias: -0.15
+  acceleration_response_noise_mode: none
+  acceleration_response_noise_std: 0.0
+  acceleration_response_ou_theta: 0.0
+  acceleration_response_noise_clip: 0.0
+  acceleration_response_max_abs_acc: 6.5
   ukf_random_jerk:
     lambda_j: 1.0
     alpha: 1.0e-3

@@ -48,6 +48,9 @@ else
         acceleration:error9_acc_history)
             CONFIG="baselines/configs/rl_target_position_rpo_train_acceleration_error9_acc_history.yaml"
             ;;
+        acceleration:error9_acc_vhz_history)
+            CONFIG="baselines/configs/rl_target_position_rpo_train_acceleration_error9_acc_vhz_history.yaml"
+            ;;
         *)
             echo "[ERROR] Unsupported INTERFACE:OBS_MODE '${INTERFACE}:${OBS_MODE}'." >&2
             echo "[ERROR] Supported combinations: ${SUPPORTED_COMBINATIONS}." >&2

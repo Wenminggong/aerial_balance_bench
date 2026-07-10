@@ -215,10 +215,13 @@ def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
 
 
 def _resolve_command_history_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg):
-    history_mode = policy_cfg.observation_mode == "error9_acc_history"
+    history_modes = {"error9_acc_history", "error9_acc_vhz_history"}
+    history_mode = policy_cfg.observation_mode in history_modes
     delay_choices = tuple(int(value) for value in (env_cfg.robustness.delay_step_choices or ()))
     if history_mode and delay_choices:
-        raise ValueError("observation_mode='error9_acc_history' currently supports only fixed delay_step.")
+        raise ValueError(
+            f"observation_mode='{policy_cfg.observation_mode}' currently supports only fixed delay_step."
+        )
 
     if isinstance(policy_cfg.command_history_length, str):
         if policy_cfg.command_history_length.lower() != "auto":
@@ -226,7 +229,7 @@ def _resolve_command_history_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: Aeri
         elif history_mode:
             if not (env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled):
                 raise ValueError(
-                    "command_history_length='auto' with observation_mode='error9_acc_history' "
+                    f"command_history_length='auto' with observation_mode='{policy_cfg.observation_mode}' "
                     "requires fixed action delay to be enabled."
                 )
             policy_cfg.command_history_length = int(env_cfg.robustness.delay_step)
@@ -239,11 +242,16 @@ def _resolve_command_history_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: Aeri
         raise ValueError("command_history_length must be non-negative.")
     if history_mode:
         if env_cfg.interface_name != "acceleration":
-            raise ValueError("observation_mode='error9_acc_history' requires interface_name='acceleration'.")
+            raise ValueError(
+                f"observation_mode='{policy_cfg.observation_mode}' requires interface_name='acceleration'."
+            )
         if int(policy_cfg.command_history_length) <= 0:
-            raise ValueError("observation_mode='error9_acc_history' requires command_history_length > 0.")
+            raise ValueError(
+                f"observation_mode='{policy_cfg.observation_mode}' requires command_history_length > 0."
+            )
     elif int(policy_cfg.command_history_length) != 0:
-        raise ValueError("command_history_length is only supported with observation_mode='error9_acc_history'.")
+        supported = "' or '".join(sorted(history_modes))
+        raise ValueError(f"command_history_length is only supported with observation_mode='{supported}'.")
 
 
 def _resolve_predictor_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg, step_dt: float):

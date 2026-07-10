@@ -33,7 +33,10 @@ class NormalizedRLTrainingWrapper(Wrapper):
         self.adapter = RLObservationAdapter(adapter_cfg, env.unwrapped.num_envs, env.unwrapped.device)
         interface_name = getattr(getattr(env.unwrapped, "cfg", None), "interface_name", None)
         if self.adapter.command_history_length > 0 and interface_name != "acceleration":
-            raise ValueError("observation_mode='error9_acc_history' is supported only with interface_name='acceleration'.")
+            raise ValueError(
+                f"observation_mode='{self.adapter.observation_mode}' is supported only with "
+                "interface_name='acceleration'."
+            )
 
         self.action_space = spaces.Box(
             low=np.array([-1.0], dtype=np.float32),
@@ -77,6 +80,7 @@ class NormalizedRLTrainingWrapper(Wrapper):
         self.adapter.reset()
         self.last_normalized_action.zero_()
         self.last_physical_action.zero_()
+        self._update_adapter_human_velocity_history(infos)
         self._copy_benchmark_metrics_to_episode_info(infos)
         return {"policy": self.adapter.transform(observations["policy"], update_history=True)}, infos
 
@@ -94,6 +98,7 @@ class NormalizedRLTrainingWrapper(Wrapper):
         self.last_normalized_action.copy_(normalized_action)
         self.last_physical_action.copy_(physical_action)
         self._update_adapter_command_history(infos)
+        self._update_adapter_human_velocity_history(infos)
 
         done_env_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
         if done_env_ids.numel() > 0:
@@ -128,7 +133,20 @@ class NormalizedRLTrainingWrapper(Wrapper):
             command_z = step_info.get("arz_cmd")
         if command_z is None:
             raise ValueError(
-                "observation_mode='error9_acc_history' requires step extras to include "
+                f"observation_mode='{self.adapter.observation_mode}' requires step extras to include "
                 "'command_z' or 'arz_cmd'."
             )
         self.adapter.update_command_history(command_z)
+
+    def _update_adapter_human_velocity_history(self, infos: dict):
+        """Feed observed human-side Z velocity into the VHZ history observation."""
+        if self.adapter.observation_mode != "error9_acc_vhz_history":
+            return
+        step_info = infos.get("step", {})
+        human_velocity_z = step_info.get("external_disturbance_vel_z")
+        if human_velocity_z is None:
+            raise ValueError(
+                "observation_mode='error9_acc_vhz_history' requires step extras to include "
+                "'external_disturbance_vel_z'."
+            )
+        self.adapter.update_human_velocity_history(human_velocity_z)

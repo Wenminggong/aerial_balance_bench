@@ -10,6 +10,9 @@ import torch
 from .base_policy import ObservationIndex
 
 
+ACCELERATION_HISTORY_MODES = frozenset({"error9_acc_history", "error9_acc_vhz_history"})
+
+
 @dataclass
 class RLObservationAdapterCfg:
     """Configuration for mapping benchmark observations to RL inputs."""
@@ -81,7 +84,7 @@ class RLObservationAdapter:
         "arz",
         "a_prev",
     )
-    SUPPORTED_MODES = {"legacy8", "full11", "error10", "error9", "error9_acc_history"}
+    SUPPORTED_MODES = {"legacy8", "full11", "error10", "error9", *ACCELERATION_HISTORY_MODES}
 
     def __init__(self, cfg: RLObservationAdapterCfg, num_envs: int, device: str | torch.device):
         self.cfg = cfg
@@ -92,18 +95,25 @@ class RLObservationAdapter:
             supported = "', '".join(sorted(self.SUPPORTED_MODES))
             raise ValueError(f"RL observation_mode must be one of '{supported}'.")
         self.command_history_length = self._parse_command_history_length(cfg.command_history_length)
-        if self.observation_mode == "error9_acc_history" and self.command_history_length <= 0:
+        if self.observation_mode in ACCELERATION_HISTORY_MODES and self.command_history_length <= 0:
             raise ValueError(
-                "RL observation_mode='error9_acc_history' requires command_history_length > 0 "
+                f"RL observation_mode='{self.observation_mode}' requires command_history_length > 0 "
                 "after resolving any 'auto' value."
             )
-        if self.observation_mode != "error9_acc_history" and self.command_history_length != 0:
-            raise ValueError("command_history_length is only supported with observation_mode='error9_acc_history'.")
+        if self.observation_mode not in ACCELERATION_HISTORY_MODES and self.command_history_length != 0:
+            supported = "' or '".join(sorted(ACCELERATION_HISTORY_MODES))
+            raise ValueError(f"command_history_length is only supported with observation_mode='{supported}'.")
 
         self.error_prev1 = torch.zeros((self.num_envs, 1), device=self.device)
         self.error_prev2 = torch.zeros((self.num_envs, 1), device=self.device)
         self.history_needs_init = torch.ones((self.num_envs,), dtype=torch.bool, device=self.device)
         self.command_history = torch.zeros((self.num_envs, self.command_history_length), device=self.device)
+        human_velocity_history_length = (
+            self.command_history_length if self.observation_mode == "error9_acc_vhz_history" else 0
+        )
+        self.human_velocity_history = torch.zeros(
+            (self.num_envs, human_velocity_history_length), device=self.device
+        )
         self.last_policy_input = torch.zeros((self.num_envs, self.input_dim), device=self.device)
         self.error = torch.zeros((self.num_envs, 1), device=self.device)
         self.error_d1 = torch.zeros((self.num_envs, 1), device=self.device)
@@ -115,6 +125,8 @@ class RLObservationAdapter:
             return 8
         if self.observation_mode in {"error9", "error9_acc_history"}:
             return 9 + self.command_history_length
+        if self.observation_mode == "error9_acc_vhz_history":
+            return 9 + 2 * self.command_history_length
         if self.observation_mode == "error10":
             return 10
         return 11
@@ -125,11 +137,16 @@ class RLObservationAdapter:
             return self.LEGACY8_FIELDS
         if self.observation_mode == "error9":
             return self.ERROR9_FIELDS
-        if self.observation_mode == "error9_acc_history":
+        if self.observation_mode in ACCELERATION_HISTORY_MODES:
             history_fields = tuple(
                 f"arz_cmd_prev{history_index}" for history_index in range(1, self.command_history_length + 1)
             )
-            return self.ERROR9_FIELDS + history_fields
+            if self.observation_mode == "error9_acc_history":
+                return self.ERROR9_FIELDS + history_fields
+            human_velocity_fields = ("vhz",) + tuple(
+                f"vhz_prev{history_index}" for history_index in range(1, self.command_history_length)
+            )
+            return self.ERROR9_FIELDS + history_fields + human_velocity_fields
         if self.observation_mode == "error10":
             return self.ERROR10_FIELDS
         return self.FULL11_FIELDS
@@ -148,6 +165,7 @@ class RLObservationAdapter:
         self.error_d1[env_ids] = 0.0
         self.error_d2[env_ids] = 0.0
         self.command_history[env_ids] = 0.0
+        self.human_velocity_history[env_ids] = 0.0
         self.last_policy_input[env_ids] = 0.0
         self.history_needs_init[env_ids] = True
 
@@ -175,6 +193,27 @@ class RLObservationAdapter:
             self.command_history[:, 1:] = self.command_history[:, :-1].clone()
         self.command_history[:, 0:1] = command_z
 
+    def update_human_velocity_history(self, human_velocity_z: torch.Tensor):
+        """Record current and recent human-side Z velocities for the VHZ history mode."""
+        if self.observation_mode != "error9_acc_vhz_history":
+            return
+        human_velocity_z = human_velocity_z.to(device=self.device, dtype=torch.float32)
+        if human_velocity_z.ndim == 1:
+            human_velocity_z = human_velocity_z.unsqueeze(-1)
+        elif human_velocity_z.ndim != 2:
+            raise ValueError(
+                "RLObservationAdapter.update_human_velocity_history expects shape "
+                f"({self.num_envs},) or ({self.num_envs}, 1); got {tuple(human_velocity_z.shape)}."
+            )
+        if human_velocity_z.shape != (self.num_envs, 1):
+            raise ValueError(
+                "RLObservationAdapter.update_human_velocity_history expects velocity shape "
+                f"({self.num_envs}, 1), got {tuple(human_velocity_z.shape)}."
+            )
+        if self.command_history_length > 1:
+            self.human_velocity_history[:, 1:] = self.human_velocity_history[:, :-1].clone()
+        self.human_velocity_history[:, 0:1] = human_velocity_z
+
     def transform(self, observation: torch.Tensor, update_history: bool = True) -> torch.Tensor:
         """Map a benchmark observation tensor to the configured RL input."""
         observation = observation.to(device=self.device, dtype=torch.float32)
@@ -200,7 +239,7 @@ class RLObservationAdapter:
 
         error_d1 = error - self.error_prev1
         error_d2 = error - 2.0 * self.error_prev1 + self.error_prev2
-        if self.observation_mode in {"error9", "error9_acc_history"}:
+        if self.observation_mode in {"error9", *ACCELERATION_HISTORY_MODES}:
             error9_input = torch.cat(
                 [
                     error,
@@ -212,6 +251,10 @@ class RLObservationAdapter:
             )
             if self.observation_mode == "error9_acc_history":
                 policy_input = torch.cat([error9_input, self.command_history], dim=-1)
+            elif self.observation_mode == "error9_acc_vhz_history":
+                policy_input = torch.cat(
+                    [error9_input, self.command_history, self.human_velocity_history], dim=-1
+                )
             else:
                 policy_input = error9_input
         elif self.observation_mode == "error10":
@@ -260,6 +303,8 @@ class RLObservationAdapter:
         }
         if self.command_history_length > 0:
             state["rl_adapter_command_history"] = self.command_history
+        if self.human_velocity_history.shape[1] > 0:
+            state["rl_adapter_human_velocity_history"] = self.human_velocity_history
         return state
 
     def to(self, device: str | torch.device):

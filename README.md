@@ -289,10 +289,18 @@ Set `command_history_length: auto` to resolve the history length from
 `robustness.delay_step`; random `delay_step_choices` are not supported by this
 adapter. Checkpoints trained with `error9_acc_history` are not shape-compatible
 with ordinary `error9` checkpoints.
+The `error9_acc_vhz_history` mode additionally appends a human-side Z-velocity
+window read from `external_disturbance_vel_z`. The window includes the current
+velocity and uses the same length as the command history, so a history length of
+`H` produces a `9 + 2H` dimensional input:
+`[error9, arz_cmd_prev1, ..., arz_cmd_prevH, vhz, vhz_prev1, ..., vhz_prev(H-1)]`.
+For example, `delay_step=4` produces a 17-D input. Its checkpoints are not
+shape-compatible with `error9` or `error9_acc_history` checkpoints.
 Use an evaluation config with the same observation mode as the checkpoint, such as
 `rl_target_position_rpo_eval_delay_free_error10.yaml` or
 `rl_target_position_rpo_eval_acceleration_delay_free_error10.yaml`; `error9` checkpoints
-should use the corresponding `*_error9.yaml` configs.
+should use the corresponding `*_error9.yaml` configs, while the VHZ-history mode uses
+`rl_target_position_rpo_eval_acceleration_delay_free_error9_acc_vhz_history.yaml`.
 
 To train the acceleration-interface variant with `max_acc=5.0` and `max_delta_acc=0.5`:
 

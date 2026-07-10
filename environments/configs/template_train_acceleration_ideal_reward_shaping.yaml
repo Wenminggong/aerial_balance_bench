@@ -45,6 +45,15 @@ robustness:
   action_delay_enabled: true
   delay_step: 4
   delay_step_choices: []
+  acceleration_response_enabled: false
+  acceleration_response_tau_s_range: [0.01, 0.03]
+  acceleration_response_gain_range: [0.95, 1.15]
+  acceleration_response_bias_range: [-0.20, -0.10]
+  acceleration_response_noise_mode: ou
+  acceleration_response_noise_std_range: [0.2, 0.6]
+  acceleration_response_ou_theta_range: [8.0, 16.0]
+  acceleration_response_noise_clip: 2.0
+  acceleration_response_max_abs_acc: 6.5
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0
   external_disturbance_ou_theta_range: [0.1, 0.3]

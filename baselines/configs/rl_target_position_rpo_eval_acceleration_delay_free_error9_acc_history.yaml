@@ -9,5 +9,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/rl_train/rpo_target_position_acceleration_error9_acc_history_seed_2025
-  run_name: rpo_target_position_acceleration_error9_acc_history_eval_delay_4_human_acceleration_response_disturbance
+  root_dir: logs/rl_train/rpo_target_position_acceleration_error9_acc_history_curr_2_seed_2025
+  run_name: rpo_target_position_acceleration_error9_acc_history_eval_delay_4_acceleration_response_disturbance_generalize

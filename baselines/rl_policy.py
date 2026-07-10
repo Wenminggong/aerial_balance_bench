@@ -165,7 +165,10 @@ class RLPolicy(BasePolicy):
         )
         self.observation_adapter = RLObservationAdapter(adapter_cfg, num_envs, self.device)
         if self.observation_adapter.command_history_length > 0 and self.interface_name != "acceleration":
-            raise ValueError("observation_mode='error9_acc_history' is supported only with interface_name='acceleration'.")
+            raise ValueError(
+                f"observation_mode='{self.observation_adapter.observation_mode}' is supported only with "
+                "interface_name='acceleration'."
+            )
         self.state_predictor = self._make_state_predictor()
 
         self.normalized_action_space = spaces.Box(
@@ -213,6 +216,9 @@ class RLPolicy(BasePolicy):
         self.normalized_action = torch.zeros((self.num_envs, 1), device=self.device)
         self.physical_action = torch.zeros((self.num_envs, 1), device=self.device)
         self.command_z = torch.zeros((self.num_envs, 1), device=self.device)
+        self.human_velocity_needs_reset = torch.ones(
+            (self.num_envs,), dtype=torch.bool, device=self.device
+        )
 
     @property
     def observation_mode(self) -> str:
@@ -229,6 +235,7 @@ class RLPolicy(BasePolicy):
         self.physical_action[env_ids] = 0.0
         self.command_z[env_ids] = 0.0
         self.policy_input[env_ids] = 0.0
+        self.human_velocity_needs_reset[env_ids] = True
         if env_ids.numel() == self.num_envs:
             self.timestep = 0
 
@@ -239,6 +246,7 @@ class RLPolicy(BasePolicy):
             raise ValueError(f"RLPolicy expects observation shape ({self.num_envs}, 11), got {tuple(raw_obs.shape)}.")
 
         model_obs = self.state_predictor.predict(raw_obs, extras=extras)
+        self._update_human_velocity_history(extras)
         self.policy_input.copy_(self.observation_adapter.transform(model_obs, update_history=True))
 
         outputs = self.agent.act(self.policy_input, timestep=self.timestep, timesteps=self.timestep)
@@ -292,10 +300,42 @@ class RLPolicy(BasePolicy):
             return
         max_acc = float(self.cfg.state_predictor.max_acc)
         if max_acc <= 0.0:
-            raise ValueError("error9_acc_history requires a positive acceleration command limit.")
+            raise ValueError(
+                f"{self.observation_adapter.observation_mode} requires a positive acceleration command limit."
+            )
         next_command_z = self.command_z + self.physical_action
         self.command_z.copy_(torch.clamp(next_command_z, min=-max_acc, max=max_acc))
         self.observation_adapter.update_command_history(self.command_z)
+
+    def _update_human_velocity_history(self, extras: Mapping | None):
+        if self.observation_adapter.observation_mode != "error9_acc_vhz_history":
+            return
+        human_velocity_z = None
+        if isinstance(extras, Mapping):
+            step_info = extras.get("step", {})
+            if isinstance(step_info, Mapping):
+                human_velocity_z = step_info.get("external_disturbance_vel_z")
+            if human_velocity_z is None:
+                human_velocity_z = extras.get("external_disturbance_vel_z")
+        if human_velocity_z is None:
+            raise ValueError(
+                "observation_mode='error9_acc_vhz_history' requires extras['step'] to include "
+                "'external_disturbance_vel_z'."
+            )
+
+        human_velocity_z = torch.as_tensor(human_velocity_z, device=self.device, dtype=torch.float32)
+        if human_velocity_z.ndim == 1:
+            human_velocity_z = human_velocity_z.unsqueeze(-1)
+        if human_velocity_z.shape != (self.num_envs, 1):
+            raise ValueError(
+                "RLPolicy expected human-side Z velocity shape "
+                f"({self.num_envs},) or ({self.num_envs}, 1), got {tuple(human_velocity_z.shape)}."
+            )
+        if torch.any(self.human_velocity_needs_reset):
+            human_velocity_z = human_velocity_z.clone()
+            human_velocity_z[self.human_velocity_needs_reset] = 0.0
+            self.human_velocity_needs_reset[:] = False
+        self.observation_adapter.update_human_velocity_history(human_velocity_z)
 
     def _resolve_predictor_cfg_defaults(self):
         predictor_cfg = self.cfg.state_predictor
