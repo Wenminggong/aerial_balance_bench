@@ -77,20 +77,6 @@ from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEn
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
 
 
-OBSERVATION_FIELDS = [
-    "pb",
-    "vb",
-    "ab",
-    "theta",
-    "omega",
-    "alpha",
-    "drz",
-    "vrz",
-    "arz",
-    "pg",
-    "a_prev",
-]
-
 STEP_EXTRA_FIELDS = (
     "pb",
     "pg",
@@ -123,8 +109,11 @@ STEP_EXTRA_FIELDS = (
     "external_disturbance_ou_sigma",
     "last_action",
     "trajectory_type_id",
+    "trajectory_center",
     "trajectory_amplitude",
     "trajectory_period",
+    "trajectory_phase",
+    "initial_ball_position",
 )
 
 
@@ -137,6 +126,13 @@ def _maybe_set_attrs(target: Any, values: dict[str, Any]):
     for key, value in values.items():
         if value is not None:
             setattr(target, key, value)
+
+
+def _set_known_attrs(target: Any, values: dict[str, Any], section: str):
+    unknown = sorted(key for key in values if not hasattr(target, key))
+    if unknown:
+        raise ValueError(f"Unknown field(s) in {section}: {', '.join(unknown)}")
+    _maybe_set_attrs(target, values)
 
 
 def _format_float_for_name(value: float) -> str:
@@ -184,6 +180,12 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
     target_position_task_cfg = config.get("target_position_task", config.get("task", {}))
     _maybe_set_attrs(env_cfg.target_position_task, target_position_task_cfg)
     _maybe_set_attrs(env_cfg.trajectory_tracking_task, config.get("trajectory_tracking_task", {}))
+    _set_known_attrs(
+        env_cfg.unified_tracking_task,
+        config.get("unified_tracking_task", {}),
+        "unified_tracking_task",
+    )
+    _set_known_attrs(env_cfg.reference_preview, config.get("reference_preview", {}), "reference_preview")
     _maybe_set_attrs(env_cfg.velocity_interface, config.get("velocity_interface", {}))
     _maybe_set_attrs(env_cfg.position_interface, config.get("position_interface", {}))
     _maybe_set_attrs(env_cfg.thrust_interface, config.get("thrust_interface", {}))
@@ -192,8 +194,14 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
     target_position_evaluator_cfg = config.get("target_position_evaluator", config.get("evaluator", {}))
     _maybe_set_attrs(env_cfg.target_position_evaluator, target_position_evaluator_cfg)
     _maybe_set_attrs(env_cfg.trajectory_tracking_evaluator, config.get("trajectory_tracking_evaluator", {}))
+    _set_known_attrs(
+        env_cfg.unified_tracking_evaluator,
+        config.get("unified_tracking_evaluator", {}),
+        "unified_tracking_evaluator",
+    )
     env_cfg.target_position_evaluator.episode_length_s = env_cfg.episode_length_s
     env_cfg.trajectory_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
+    env_cfg.unified_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
 
     return env_cfg
 
@@ -262,24 +270,10 @@ def main():
     target_episodes = max(target_episodes, 1)
     env_cfg.target_position_evaluator.num_eval_episodes = target_episodes
     env_cfg.trajectory_tracking_evaluator.num_eval_episodes = target_episodes
+    env_cfg.unified_tracking_evaluator.num_eval_episodes = target_episodes
 
     output_dir = _make_output_dir(config, seed, target_episodes)
     save_yaml(config, output_dir / "input_config.yaml")
-    save_yaml(
-        {
-            "seed": seed,
-            "num_envs": env_cfg.scene.num_envs,
-            "episode_length_s": env_cfg.episode_length_s,
-            "task_name": env_cfg.task_name,
-            "interface_name": env_cfg.interface_name,
-            "target_episodes": target_episodes,
-            "sim_device": env_cfg.sim.device,
-            "config_path": str(config_path),
-            "observation_fields": OBSERVATION_FIELDS,
-        },
-        output_dir / "resolved_run.yaml",
-    )
-
     env = AerialBalanceEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     if args_cli.video:
         video_kwargs = {
@@ -292,6 +286,27 @@ def main():
 
     base_env = env.unwrapped
     num_envs = base_env.num_envs
+    observation_fields = tuple(base_env.observation_fields)
+    task_metadata = base_env.task.get_config_info() if hasattr(base_env.task, "get_config_info") else {}
+    save_yaml(
+        {
+            "seed": seed,
+            "num_envs": num_envs,
+            "episode_length_s": env_cfg.episode_length_s,
+            "task_name": env_cfg.task_name,
+            "interface_name": env_cfg.interface_name,
+            "target_episodes": target_episodes,
+            "sim_device": env_cfg.sim.device,
+            "config_path": str(config_path),
+            "raw_observation_dim": base_env.raw_observation_dim,
+            "observation_fields": list(observation_fields),
+            "reference_preview_enabled": env_cfg.reference_preview.enabled,
+            "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
+            "reference_preview_offsets": list(base_env.reference_preview_offsets),
+            **task_metadata,
+        },
+        output_dir / "resolved_run.yaml",
+    )
     observations, infos = env.reset()
     observations = observations["policy"]
 
@@ -348,7 +363,7 @@ def main():
     rollout_steps = len(obs_records)
     env.close()
 
-    observations_np = _stack_or_empty(obs_records, (0, num_envs, len(OBSERVATION_FIELDS)))
+    observations_np = _stack_or_empty(obs_records, (0, num_envs, len(observation_fields)))
     rewards_np = _stack_or_empty(reward_records, (0, num_envs))
 
     if bool(runner_cfg.get("save_rollout", True)):
@@ -359,7 +374,7 @@ def main():
             "terminated": _stack_or_empty(terminated_records, (0, num_envs), dtype=bool),
             "truncated": _stack_or_empty(truncated_records, (0, num_envs), dtype=bool),
             "policy_compute_time": np.asarray(policy_compute_time_records, dtype=np.float64),
-            "observation_fields": np.asarray(OBSERVATION_FIELDS),
+            "observation_fields": np.asarray(observation_fields),
         }
         for key, records in step_extra_records.items():
             if records:

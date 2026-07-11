@@ -28,7 +28,11 @@ class RLObservationAdapterCfg:
 
 
 class RLObservationAdapter:
-    """Convert the 11-D benchmark observation to an RL policy input."""
+    """Convert raw benchmark observations to an RL policy input.
+
+    The first 11 raw fields retain the original benchmark layout.  Optional
+    reference-preview fields are appended as ``vg_0, pg_1, vg_1, ...``.
+    """
 
     LEGACY8_FIELDS = (
         "error",
@@ -53,14 +57,32 @@ class RLObservationAdapter:
         "pg",
         "a_prev",
     )
+    REFERENCE_PREVIEW_PLANT_FIELDS = FULL11_FIELDS[:9]
 
-    def __init__(self, cfg: RLObservationAdapterCfg, num_envs: int, device: str | torch.device):
+    def __init__(
+        self,
+        cfg: RLObservationAdapterCfg,
+        num_envs: int,
+        device: str | torch.device,
+        raw_observation_dim: int | None = None,
+        raw_observation_fields: Sequence[str] | None = None,
+    ):
         self.cfg = cfg
         self.num_envs = int(num_envs)
         self.device = torch.device(device)
         self.observation_mode = str(cfg.observation_mode).lower()
-        if self.observation_mode not in {"legacy8", "full11"}:
-            raise ValueError("RL observation_mode must be 'legacy8' or 'full11'.")
+        if self.observation_mode not in {"legacy8", "full11", "reference_preview"}:
+            raise ValueError(
+                "RL observation_mode must be 'legacy8', 'full11', or 'reference_preview'."
+            )
+
+        self.raw_observation_dim, self.raw_observation_fields = self._resolve_raw_observation_spec(
+            raw_observation_dim,
+            raw_observation_fields,
+        )
+        self.reference_preview_future_steps: int | None = None
+        if self.observation_mode == "reference_preview":
+            self.reference_preview_future_steps = self._validate_reference_preview_spec()
 
         self.error_prev1 = torch.zeros((self.num_envs, 1), device=self.device)
         self.error_prev2 = torch.zeros((self.num_envs, 1), device=self.device)
@@ -74,13 +96,28 @@ class RLObservationAdapter:
     def input_dim(self) -> int:
         if self.observation_mode == "legacy8":
             return 8
-        return 11
+        if self.observation_mode == "full11":
+            return 11
+        return self.raw_observation_dim
 
     @property
     def field_names(self) -> tuple[str, ...]:
         if self.observation_mode == "legacy8":
             return self.LEGACY8_FIELDS
-        return self.FULL11_FIELDS
+        if self.observation_mode == "full11":
+            return self.FULL11_FIELDS
+        assert self.reference_preview_future_steps is not None
+        fields = [*self.REFERENCE_PREVIEW_PLANT_FIELDS, "a_prev", "pg_0", "vg_0"]
+        for offset in range(1, self.reference_preview_future_steps + 1):
+            fields.extend((f"pg_{offset}", f"vg_{offset}"))
+        return tuple(fields)
+
+    @property
+    def preview_offsets(self) -> tuple[int, ...]:
+        """Return reference offsets consumed by the preview policy input."""
+        if self.reference_preview_future_steps is None:
+            return ()
+        return tuple(range(self.reference_preview_future_steps + 1))
 
     def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None):
         """Reset history for all envs or a selected subset."""
@@ -101,15 +138,34 @@ class RLObservationAdapter:
     def transform(self, observation: torch.Tensor, update_history: bool = True) -> torch.Tensor:
         """Map a benchmark observation tensor to the configured RL input."""
         observation = observation.to(device=self.device, dtype=torch.float32)
-        if observation.shape != (self.num_envs, 11):
+        if observation.ndim != 2 or observation.shape[0] != self.num_envs or observation.shape[1] < 11:
             raise ValueError(
-                f"RLObservationAdapter expects observation shape ({self.num_envs}, 11), "
+                f"RLObservationAdapter expects observation shape ({self.num_envs}, D) with D >= 11, "
                 f"got {tuple(observation.shape)}."
             )
 
+        if self.observation_mode == "reference_preview":
+            if observation.shape[1] != self.raw_observation_dim:
+                raise ValueError(
+                    "RLObservationAdapter reference_preview input dimension does not match its raw "
+                    f"observation spec: expected {self.raw_observation_dim}, got {observation.shape[1]}."
+                )
+            policy_input = torch.cat(
+                (
+                    observation[:, :9],
+                    observation[:, ObservationIndex.A_PREV : ObservationIndex.A_PREV + 1],
+                    observation[:, ObservationIndex.PG : ObservationIndex.PG + 1],
+                    observation[:, 11:],
+                ),
+                dim=-1,
+            )
+            self.last_policy_input.copy_(policy_input)
+            return policy_input
+
         if self.observation_mode == "full11":
-            self.last_policy_input.copy_(observation)
-            return observation
+            legacy_observation = observation[:, :11]
+            self.last_policy_input.copy_(legacy_observation)
+            return legacy_observation
 
         pb = observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
         pg = observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
@@ -148,6 +204,67 @@ class RLObservationAdapter:
             if torch.any(self.history_needs_init):
                 self.history_needs_init[:] = False
         return policy_input
+
+    def _resolve_raw_observation_spec(
+        self,
+        raw_observation_dim: int | None,
+        raw_observation_fields: Sequence[str] | None,
+    ) -> tuple[int, tuple[str, ...]]:
+        if isinstance(raw_observation_fields, (str, bytes)):
+            raise TypeError("raw_observation_fields must be a sequence of field names, not a string.")
+        fields = None if raw_observation_fields is None else tuple(str(name) for name in raw_observation_fields)
+
+        if raw_observation_dim is None:
+            raw_observation_dim = len(fields) if fields is not None else 11
+        raw_observation_dim = int(raw_observation_dim)
+        if raw_observation_dim < 11:
+            raise ValueError(f"raw_observation_dim must be at least 11, got {raw_observation_dim}.")
+        if fields is not None and len(fields) != raw_observation_dim:
+            raise ValueError(
+                "raw_observation_fields length must match raw_observation_dim: "
+                f"got {len(fields)} fields for dimension {raw_observation_dim}."
+            )
+        if fields is None:
+            fields = self._default_raw_observation_fields(raw_observation_dim)
+        return raw_observation_dim, fields
+
+    def _validate_reference_preview_spec(self) -> int:
+        extra_dim = self.raw_observation_dim - 12
+        if extra_dim < 0 or extra_dim % 2 != 0:
+            raise ValueError(
+                "reference_preview requires raw layout [legacy11, vg_0, pg_1, vg_1, ...] "
+                "with dimension 12 + 2 * future_steps; "
+                f"got dimension {self.raw_observation_dim}."
+            )
+
+        future_steps = extra_dim // 2
+        expected_fields = self._default_raw_observation_fields(self.raw_observation_dim)
+        normalized_actual = list(self.raw_observation_fields)
+        # The legacy environment calls the current target field ``pg``.  Also
+        # accept the explicit preview spelling ``pg_0`` when a caller provides
+        # its own observation spec.
+        if normalized_actual[ObservationIndex.PG] == "pg_0":
+            normalized_actual[ObservationIndex.PG] = "pg"
+        if tuple(normalized_actual) != expected_fields:
+            raise ValueError(
+                "reference_preview raw_observation_fields must follow "
+                "[pb, vb, ab, theta, omega, alpha, drz, vrz, arz, pg, a_prev, "
+                "vg_0, pg_1, vg_1, ...]; "
+                f"got {self.raw_observation_fields}."
+            )
+        return future_steps
+
+    @classmethod
+    def _default_raw_observation_fields(cls, raw_observation_dim: int) -> tuple[str, ...]:
+        fields = list(cls.FULL11_FIELDS)
+        extra_dim = raw_observation_dim - 12
+        if extra_dim >= 0 and extra_dim % 2 == 0:
+            fields.append("vg_0")
+            for offset in range(1, extra_dim // 2 + 1):
+                fields.extend((f"pg_{offset}", f"vg_{offset}"))
+        else:
+            fields.extend(f"extra_{index}" for index in range(raw_observation_dim - 11))
+        return tuple(fields)
 
     def get_state(self) -> dict[str, torch.Tensor]:
         """Return adapter diagnostics."""

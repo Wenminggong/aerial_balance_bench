@@ -8,7 +8,7 @@ Aerial-Balance-Bench is an Isaac Lab/Sim based benchmark for studying indirect d
 
 The benchmark provides:
 
-- Two task families: target-position balancing and trajectory tracking
+- Two task families—target-position balancing and trajectory tracking—plus a unified reference-tracking representation for mixed-policy training
 - Three high-level command interfaces: thrust, velocity, and position
 - A Gym-style Isaac Lab environment with unified observations, actions, rewards, and evaluation metrics
 - Robustness tests for mass variation, low-level gain variation, action delay, and external disturbance
@@ -47,6 +47,9 @@ The implementation is built on Isaac Lab and exposes a Gym-style interface for c
 | --- | --- | --- | --- |
 | Target-position balancing | `task_name: target_position` | Drive the ball to a fixed or sampled target position on the beam. | Initial ball position and target position are sampled from configurable ranges. |
 | Trajectory tracking | `task_name: trajectory_tracking` | Track a time-varying reference ball position. | The ball starts from a configurable center position; references can be sine, triangle, trapezoid, or random among these families. |
+| Unified reference tracking | `task_name: unified_tracking` | Train one policy on constant, sine, triangle, and trapezoid references. | Reference type and parameters are sampled per environment; a singleton type list provides controlled per-family evaluation. |
+
+`unified_tracking` expresses target-position balancing as a constant trajectory while keeping reference generation independent from initial-state sampling. The supplied mixed config uses random constant goals with independent random ball positions and starts dynamic references on their sampled reference position. The original two task implementations and configs remain available and unchanged. See [Unified Reference Tracking](docs/unified_reference_tracking.md) for the complete sampling, reset, reward, preview, metric, and compatibility contracts.
 
 The ball reference trajectories are visualized below. The constant reference corresponds to the target-position balancing task, while the sine, triangle, and trapezoidal references correspond to trajectory-tracking settings.
 
@@ -76,7 +79,7 @@ For the detailed derivation of the dynamic model associated with each control in
 
 ### Observation space
 
-The policy observation is an 11-D tensor returned under `observations["policy"]`:
+By default, the policy observation is the unchanged 11-D tensor returned under `observations["policy"]`:
 
 ```text
 [pb, vb, ab, theta, omega, alpha, drz, vrz, arz, pg, a_prev]
@@ -96,7 +99,23 @@ The policy observation is an 11-D tensor returned under `observations["policy"]`
 | `pg` | Desired ball position, fixed for target-position balancing and time-varying for tracking |
 | `a_prev` | Previous high-level action |
 
-The same observation layout is used by both benchmark tasks. The index constants are available in `baselines/base_policy.py` as `ObservationIndex`.
+All tasks share this legacy observation prefix. The index constants are available in `baselines/base_policy.py` as `ObservationIndex`.
+
+Unified configs can enable a configurable short reference preview:
+
+```yaml
+reference_preview:
+  enabled: true
+  future_steps: 5
+```
+
+The legacy 11-D prefix and all of its indices remain unchanged. With a preview horizon `H`, the environment appends:
+
+```text
+[vg_0, pg_1, vg_1, ..., pg_H, vg_H]
+```
+
+The resulting raw dimension is `12 + 2H` (22 for the supplied `H = 5` configs). The RL `reference_preview` adapter consumes plant state, previous action, and all current/future position and velocity references. Existing `legacy8` and `full11` adapters continue to consume only the legacy prefix.
 
 ### Rewards and termination
 
@@ -111,6 +130,8 @@ Trajectory tracking uses position and velocity tracking terms, control effort, a
 ```text
 r = r_object + r_control + r_failure + r_progress
 ```
+
+Unified reference tracking applies one common position/velocity tracking reward to all four reference types, including `constant`. It deliberately does not add a constant-only goal bonus, so the policy is optimized against a single objective across the mixed distribution.
 
 For the exact reward parameters and the mapping between paper notation and code configuration fields, see the [reward design](docs/reward_design.md) document.
 
@@ -136,6 +157,8 @@ For trajectory tracking, the evaluator reports:
 | `RMSE` / `root_mean_square_error` | Root mean square position tracking error |
 | `MAXE` / `maximum_absolute_error` | Worst position tracking error in an episode |
 | `COMT` | Controller computation time, reported by policy runners |
+
+The unified evaluator always reports global and per-type MAE/RMSE/MAXE plus completed-episode counts. For constant episodes it additionally reports the target-position success rate, steady-state error, climbing time, and convergence time under `constant_`-prefixed keys. Types with no completed episodes have count zero and numeric metrics `NaN`.
 
 ### Robustness tests
 
@@ -215,6 +238,13 @@ python3 scripts/zero_action_policy_eval.py \
   --episodes 10 \
   --num_envs 10 \
   --headless
+
+# unified mixed reference tracking
+python3 scripts/zero_action_policy_eval.py \
+  --config environments/configs/unified_tracking_mixed.yaml \
+  --episodes 4 \
+  --num_envs 4 \
+  --headless
 ```
 
 Logs are written under `logs/zero_action/` unless overridden by the YAML file or `--run_name`.
@@ -253,6 +283,21 @@ python3 scripts/rl_policy_eval.py \
   --headless
 ```
 
+Evaluate one unified preview-policy checkpoint on an individual reference family by overriding the environment config:
+
+```bash
+python3 scripts/rl_policy_eval.py \
+  --config baselines/configs/rl_unified_tracking_rpo_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine.yaml \
+  --checkpoint /path/to/best_agent.pt \
+  --episodes 1000 \
+  --num_envs 10 \
+  --run_name rpo_unified_sine_eval \
+  --headless
+```
+
+Use `unified_tracking_constant.yaml`, `unified_tracking_triangle.yaml`, or `unified_tracking_trapezoid.yaml` for the other families. CPID and NMPC are not wired to `unified_tracking`; their existing task paths are unchanged.
+
 ### Train an RL policy using RPO
 
 ```bash
@@ -265,6 +310,18 @@ python3 scripts/rl_train.py \
 
 The default RPO training configuration uses the velocity interface and the `legacy8` observation adapter.
 
+Train one RPO policy on the four-family mixed distribution with a five-step position/velocity reference preview:
+
+```bash
+python3 scripts/rl_train.py \
+  --config baselines/configs/rl_unified_tracking_rpo_train.yaml \
+  --num_envs 1024 \
+  --max_iterations 300 \
+  --headless
+```
+
+The preview policy mode is not compatible with an active delay state predictor (`enabled: true` with `delay_step > 0`). Use the predictor-disabled policy templates supplied for unified training and evaluation.
+
 
 ### Configuration files
 
@@ -274,14 +331,16 @@ Common environment fields:
 
 | Field | Meaning |
 | --- | --- |
-| `task_name` | Selects `target_position` or `trajectory_tracking`. |
+| `task_name` | Selects `target_position`, `trajectory_tracking`, or `unified_tracking`. |
 | `interface_name` | Selects `velocity`, `position`, or `thrust`. |
 | `env` | Sets seed, number of parallel environments, episode length, device, and selected physical constants. |
 | `target_position_task` | Target-position reset ranges, goal sampling, reward weights, and failure threshold. |
 | `trajectory_tracking_task` | Reference type, amplitude/period settings, randomization, reward weights, and failure threshold. |
+| `unified_tracking_task` | Eligible reference types/weights, parameter ranges, independent initial-state modes, common reward, and failure threshold. |
+| `reference_preview` | Enables current/future desired position and velocity fields and sets the future control-step horizon. |
 | `velocity_interface`, `position_interface`, `thrust_interface` | Interface-specific action limits and low-level controller settings. |
 | `robustness` | Enables mass, gain, delay, and disturbance tests. |
-| `target_position_evaluator`, `trajectory_tracking_evaluator` | Evaluation episode count, tolerance, and final-window settings. |
+| `target_position_evaluator`, `trajectory_tracking_evaluator`, `unified_tracking_evaluator` | Evaluation episode count, tolerance, final-window settings, and task-specific aggregates. |
 | `runner` | Evaluation episode target, maximum rollout steps, rendering, and rollout saving. |
 | `logging` | Output root and run name. |
 
@@ -289,6 +348,8 @@ Template configs:
 
 - `environments/configs/target_position_balancing.yaml`
 - `environments/configs/trajectory_tracking.yaml`
+- `environments/configs/unified_tracking_mixed.yaml`
+- `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid}.yaml`
 
 
 ### Implement a custom policy

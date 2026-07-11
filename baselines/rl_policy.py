@@ -76,6 +76,8 @@ class RLPolicy(BasePolicy):
         device: str | torch.device,
         step_dt: float,
         physical_action_limit: float,
+        raw_observation_dim: int | None = None,
+        raw_observation_fields: Sequence[str] | None = None,
     ):
         super().__init__(cfg, num_envs, device)
         self.step_dt = float(step_dt)
@@ -87,8 +89,20 @@ class RLPolicy(BasePolicy):
 
         self._resolve_predictor_cfg_defaults()
         adapter_cfg = RLObservationAdapterCfg(observation_mode=cfg.observation_mode)
-        self.observation_adapter = RLObservationAdapter(adapter_cfg, num_envs, self.device)
+        self.observation_adapter = RLObservationAdapter(
+            adapter_cfg,
+            num_envs,
+            self.device,
+            raw_observation_dim=raw_observation_dim,
+            raw_observation_fields=raw_observation_fields,
+        )
         self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        if self.observation_mode == "reference_preview" and self.state_predictor.active:
+            raise ValueError(
+                "RL observation_mode='reference_preview' cannot be combined with an active state "
+                "predictor because future-reference advancement is not implemented. Disable the "
+                "state predictor or use observation_mode='legacy8'/'full11'."
+            )
 
         self.normalized_action_space = spaces.Box(
             low=np.array([-1.0], dtype=np.float32),
@@ -128,7 +142,17 @@ class RLPolicy(BasePolicy):
         if cfg.load_checkpoint:
             if not cfg.checkpoint_path:
                 raise ValueError("RLPolicyCfg.load_checkpoint=True requires checkpoint_path.")
-            self.agent.load(str(Path(cfg.checkpoint_path).expanduser()))
+            try:
+                self.agent.load(str(Path(cfg.checkpoint_path).expanduser()))
+            except Exception as exc:
+                preview_horizon = self.observation_adapter.reference_preview_future_steps
+                raise RuntimeError(
+                    f"Failed to load RL checkpoint for observation_mode='{self.observation_mode}', "
+                    f"raw_observation_dim={self.observation_adapter.raw_observation_dim}, "
+                    f"policy_input_dim={self.observation_adapter.input_dim}, "
+                    f"preview_future_steps={preview_horizon}. Check that the checkpoint was trained "
+                    "with the same observation layout."
+                ) from exc
 
         self.timestep = 0
         self.policy_input = torch.zeros((self.num_envs, self.observation_adapter.input_dim), device=self.device)
@@ -156,10 +180,19 @@ class RLPolicy(BasePolicy):
         """Compute a physical velocity-increment action from environment observations."""
         del extras
         raw_obs = self._extract_policy_observation(observations)
-        if raw_obs.shape != (self.num_envs, 11):
-            raise ValueError(f"RLPolicy expects observation shape ({self.num_envs}, 11), got {tuple(raw_obs.shape)}.")
+        if raw_obs.ndim != 2 or raw_obs.shape[0] != self.num_envs or raw_obs.shape[1] < 11:
+            raise ValueError(
+                f"RLPolicy expects observation shape ({self.num_envs}, D) with D >= 11, "
+                f"got {tuple(raw_obs.shape)}."
+            )
 
-        model_obs = self.state_predictor.predict(raw_obs)
+        # The predictor intentionally retains its legacy 11-D contract.  Any
+        # appended reference preview bypasses it and is reattached unchanged.
+        model_legacy_obs = self.state_predictor.predict(raw_obs[:, :11])
+        if raw_obs.shape[1] > 11:
+            model_obs = torch.cat((model_legacy_obs, raw_obs[:, 11:]), dim=-1)
+        else:
+            model_obs = model_legacy_obs
         self.policy_input.copy_(self.observation_adapter.transform(model_obs, update_history=True))
 
         outputs = self.agent.act(self.policy_input, timestep=self.timestep, timesteps=self.timestep)

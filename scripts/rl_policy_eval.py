@@ -101,20 +101,6 @@ from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEn
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
 
 
-OBSERVATION_FIELDS = [
-    "pb",
-    "vb",
-    "ab",
-    "theta",
-    "omega",
-    "alpha",
-    "drz",
-    "vrz",
-    "arz",
-    "pg",
-    "a_prev",
-]
-
 STEP_EXTRA_FIELDS = (
     "pb",
     "pg",
@@ -132,6 +118,12 @@ STEP_EXTRA_FIELDS = (
     "external_disturbance_enabled",
     "external_disturbance_vel_z",
     "last_action",
+    "trajectory_type_id",
+    "trajectory_center",
+    "trajectory_amplitude",
+    "trajectory_period",
+    "trajectory_phase",
+    "initial_ball_position",
 )
 
 
@@ -144,6 +136,13 @@ def _maybe_set_attrs(target: Any, values: dict[str, Any]):
     for key, value in values.items():
         if value is not None:
             setattr(target, key, value)
+
+
+def _set_known_attrs(target: Any, values: dict[str, Any], section: str):
+    unknown = sorted(key for key in values if not hasattr(target, key))
+    if unknown:
+        raise ValueError(f"Unknown field(s) in {section}: {', '.join(unknown)}")
+    _maybe_set_attrs(target, values)
 
 
 def _resolve_seed(run_config: dict[str, Any], env_config: dict[str, Any]) -> int:
@@ -183,20 +182,32 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
 
     _maybe_set_attrs(env_cfg.target_position_task, config.get("target_position_task", config.get("task", {})))
     _maybe_set_attrs(env_cfg.trajectory_tracking_task, config.get("trajectory_tracking_task", {}))
+    _set_known_attrs(
+        env_cfg.unified_tracking_task,
+        config.get("unified_tracking_task", {}),
+        "unified_tracking_task",
+    )
+    _set_known_attrs(env_cfg.reference_preview, config.get("reference_preview", {}), "reference_preview")
     _maybe_set_attrs(env_cfg.velocity_interface, config.get("velocity_interface", {}))
     _maybe_set_attrs(env_cfg.position_interface, config.get("position_interface", {}))
     _maybe_set_attrs(env_cfg.thrust_interface, config.get("thrust_interface", {}))
     _maybe_set_attrs(env_cfg.robustness, config.get("robustness", {}))
     _maybe_set_attrs(env_cfg.target_position_evaluator, config.get("target_position_evaluator", config.get("evaluator", {})))
     _maybe_set_attrs(env_cfg.trajectory_tracking_evaluator, config.get("trajectory_tracking_evaluator", {}))
+    _set_known_attrs(
+        env_cfg.unified_tracking_evaluator,
+        config.get("unified_tracking_evaluator", {}),
+        "unified_tracking_evaluator",
+    )
     env_cfg.target_position_evaluator.episode_length_s = env_cfg.episode_length_s
     env_cfg.trajectory_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
+    env_cfg.unified_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
     return env_cfg
 
 
 def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
-    if env_cfg.task_name != "target_position":
-        raise ValueError("RLPolicy runner currently supports only task_name='target_position'.")
+    if env_cfg.task_name not in {"target_position", "unified_tracking"}:
+        raise ValueError("RLPolicy runner supports task_name='target_position' or 'unified_tracking'.")
     if env_cfg.interface_name != "velocity":
         raise ValueError("RLPolicy runner currently supports only interface_name='velocity'.")
 
@@ -335,6 +346,7 @@ def main():
     target_episodes = max(target_episodes, 1)
     env_cfg.target_position_evaluator.num_eval_episodes = target_episodes
     env_cfg.trajectory_tracking_evaluator.num_eval_episodes = target_episodes
+    env_cfg.unified_tracking_evaluator.num_eval_episodes = target_episodes
 
     output_dir = _make_output_dir(run_config, seed, target_episodes)
     save_yaml(run_config, output_dir / "input_run_config.yaml")
@@ -356,8 +368,18 @@ def main():
         base_env = env.unwrapped
         physical_action_limit = float(base_env.action_space.high[0])
         _resolve_predictor_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
-        policy = RLPolicy(policy_cfg, base_env.num_envs, base_env.device, base_env.step_dt, physical_action_limit)
+        policy = RLPolicy(
+            policy_cfg,
+            base_env.num_envs,
+            base_env.device,
+            base_env.step_dt,
+            physical_action_limit,
+            raw_observation_dim=base_env.raw_observation_dim,
+            raw_observation_fields=base_env.observation_fields,
+        )
         num_envs = base_env.num_envs
+        observation_fields = tuple(base_env.observation_fields)
+        task_metadata = base_env.task.get_config_info() if hasattr(base_env.task, "get_config_info") else {}
 
         save_yaml(
             {
@@ -368,7 +390,13 @@ def main():
                 "interface_name": env_cfg.interface_name,
                 "algorithm": policy_cfg.algorithm,
                 "observation_mode": policy_cfg.observation_mode,
+                "raw_observation_dim": base_env.raw_observation_dim,
+                "observation_fields": list(observation_fields),
                 "policy_input_fields": list(policy.observation_adapter.field_names),
+                "policy_input_dim": policy.observation_adapter.input_dim,
+                "reference_preview_enabled": env_cfg.reference_preview.enabled,
+                "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
+                "reference_preview_offsets": list(base_env.reference_preview_offsets),
                 "physical_action_limit": physical_action_limit,
                 "checkpoint_path": policy_cfg.checkpoint_path,
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,
@@ -376,6 +404,7 @@ def main():
                 "run_config_path": str(run_config_path),
                 "env_config_path": str(env_config_path),
                 "policy_config_path": str(policy_config_path),
+                **task_metadata,
             },
             output_dir / "resolved_run.yaml",
         )
@@ -438,7 +467,7 @@ def main():
                 break
 
         rollout_steps = len(obs_records)
-        observations_np = _stack_or_empty(obs_records, (0, num_envs, len(OBSERVATION_FIELDS)))
+        observations_np = _stack_or_empty(obs_records, (0, num_envs, len(observation_fields)))
         rewards_np = _stack_or_empty(reward_records, (0, num_envs))
         if bool(runner_cfg.get("save_rollout", True)):
             rollout_payload = {
@@ -449,7 +478,7 @@ def main():
                 "terminated": _stack_or_empty(terminated_records, (0, num_envs), dtype=bool),
                 "truncated": _stack_or_empty(truncated_records, (0, num_envs), dtype=bool),
                 "policy_compute_time": np.asarray(policy_compute_time_records, dtype=np.float64),
-                "observation_fields": np.asarray(OBSERVATION_FIELDS),
+                "observation_fields": np.asarray(observation_fields),
                 "policy_input_fields": np.asarray(policy.observation_adapter.field_names),
             }
             for key, records in step_extra_records.items():

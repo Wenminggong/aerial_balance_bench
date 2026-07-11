@@ -23,6 +23,8 @@ from .evaluation import (
     TargetPositionEvaluatorCfg,
     TrajectoryTrackingEvaluator,
     TrajectoryTrackingEvaluatorCfg,
+    UnifiedTrackingEvaluator,
+    UnifiedTrackingEvaluatorCfg,
 )
 from .interfaces import (
     PositionInterface,
@@ -32,8 +34,16 @@ from .interfaces import (
     VelocityInterface,
     VelocityInterfaceCfg,
 )
+from .observation_schema import ReferencePreviewCfg, build_observation_fields
 from .robustness import RobustnessManager, RobustnessManagerCfg
-from .tasks import TargetPositionTask, TargetPositionTaskCfg, TrajectoryTrackingTask, TrajectoryTrackingTaskCfg
+from .tasks import (
+    TargetPositionTask,
+    TargetPositionTaskCfg,
+    TrajectoryTrackingTask,
+    TrajectoryTrackingTaskCfg,
+    UnifiedTrackingTask,
+    UnifiedTrackingTaskCfg,
+)
 
 
 @configclass
@@ -110,6 +120,8 @@ class AerialBalanceEnvCfg(DirectRLEnvCfg):
     task_name: str = "target_position"
     target_position_task: TargetPositionTaskCfg = TargetPositionTaskCfg()
     trajectory_tracking_task: TrajectoryTrackingTaskCfg = TrajectoryTrackingTaskCfg()
+    unified_tracking_task: UnifiedTrackingTaskCfg = UnifiedTrackingTaskCfg()
+    reference_preview: ReferencePreviewCfg = ReferencePreviewCfg()
     interface_name: str = "velocity"
     velocity_interface: VelocityInterfaceCfg = VelocityInterfaceCfg()
     position_interface: PositionInterfaceCfg = PositionInterfaceCfg()
@@ -117,6 +129,7 @@ class AerialBalanceEnvCfg(DirectRLEnvCfg):
     robustness: RobustnessManagerCfg = RobustnessManagerCfg()
     target_position_evaluator: TargetPositionEvaluatorCfg = TargetPositionEvaluatorCfg()
     trajectory_tracking_evaluator: TrajectoryTrackingEvaluatorCfg = TrajectoryTrackingEvaluatorCfg()
+    unified_tracking_evaluator: UnifiedTrackingEvaluatorCfg = UnifiedTrackingEvaluatorCfg()
 
 
 class AerialBalanceEnv(DirectRLEnv):
@@ -125,6 +138,11 @@ class AerialBalanceEnv(DirectRLEnv):
     cfg: AerialBalanceEnvCfg
 
     def __init__(self, cfg: AerialBalanceEnvCfg, render_mode: str | None = None, **kwargs):
+        self.observation_fields = build_observation_fields(cfg.reference_preview)
+        self.raw_observation_dim = len(self.observation_fields)
+        self.reference_preview_offsets = (
+            tuple(range(cfg.reference_preview.future_steps + 1)) if cfg.reference_preview.enabled else ()
+        )
         self._configure_spaces(cfg)
         super().__init__(cfg, render_mode, **kwargs)
 
@@ -173,11 +191,15 @@ class AerialBalanceEnv(DirectRLEnv):
         self.reset_buf = self.reset_terminated | self.reset_time_outs
 
         state = self._state_dict()
+        evaluator_kwargs = {}
+        if self.cfg.task_name == "unified_tracking":
+            evaluator_kwargs["trajectory_type_id"] = self.task.trajectory_type_id
         benchmark_metrics = self.evaluator.update(
             state,
             self.reset_terminated,
             self.reset_time_outs,
             self.episode_length_buf,
+            **evaluator_kwargs,
         )
         self.extras = {"step": self._step_extras(), "benchmark": benchmark_metrics}
 
@@ -230,7 +252,7 @@ class AerialBalanceEnv(DirectRLEnv):
 
     def _get_observations(self):
         pg, _ = self.task.get_reference(self.episode_length_buf)
-        obs = torch.stack(
+        legacy_obs = torch.stack(
             [
                 self.pb,
                 self.vb,
@@ -246,11 +268,33 @@ class AerialBalanceEnv(DirectRLEnv):
             ],
             dim=-1,
         )
+        if not self.cfg.reference_preview.enabled:
+            return {"policy": legacy_obs}
+
+        pg_preview, vg_preview = self._get_reference_preview(self.cfg.reference_preview.future_steps)
+        extension = [vg_preview[:, :1]]
+        if self.cfg.reference_preview.future_steps > 0:
+            future_pairs = torch.stack((pg_preview[:, 1:], vg_preview[:, 1:]), dim=-1)
+            extension.append(future_pairs.reshape(self.num_envs, -1))
+        obs = torch.cat((legacy_obs, *extension), dim=-1)
         return {"policy": obs}
+
+    def _get_reference_preview(self, future_steps: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return current and future references for every environment."""
+        if hasattr(self.task, "get_reference_preview"):
+            return self.task.get_reference_preview(self.episode_length_buf, future_steps)
+
+        positions = []
+        velocities = []
+        for offset in range(future_steps + 1):
+            pg, vg = self.task.get_reference(self.episode_length_buf + offset)
+            positions.append(pg)
+            velocities.append(vg)
+        return torch.stack(positions, dim=-1), torch.stack(velocities, dim=-1)
 
     def _get_rewards(self):
         reward_kwargs = {}
-        if self.cfg.task_name == "target_position":
+        if self.cfg.task_name in {"target_position", "unified_tracking"}:
             reward_kwargs["terminated"] = self.reset_terminated
         return self.task.compute_reward(
             self._state_dict(),
@@ -306,9 +350,11 @@ class AerialBalanceEnv(DirectRLEnv):
             high=np.array([action_limit], dtype=np.float32),
             dtype=np.float32,
         )
-        cfg.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32)
+        observation_dim = len(build_observation_fields(cfg.reference_preview))
+        cfg.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(observation_dim,), dtype=np.float32)
         cfg.target_position_evaluator.episode_length_s = cfg.episode_length_s
         cfg.trajectory_tracking_evaluator.episode_length_s = cfg.episode_length_s
+        cfg.unified_tracking_evaluator.episode_length_s = cfg.episode_length_s
 
     def _create_control_interface(self, cfg: AerialBalanceEnvCfg):
         if cfg.interface_name == "velocity":
@@ -356,9 +402,26 @@ class AerialBalanceEnv(DirectRLEnv):
                     self.step_dt,
                 ),
             )
+        if cfg.task_name == "unified_tracking":
+            return (
+                UnifiedTrackingTask(
+                    cfg.unified_tracking_task,
+                    self.num_envs,
+                    self.device,
+                    self.step_dt,
+                    cfg.beam_position_min,
+                    cfg.beam_position_max,
+                ),
+                UnifiedTrackingEvaluator(
+                    cfg.unified_tracking_evaluator,
+                    self.num_envs,
+                    self.device,
+                    self.step_dt,
+                ),
+            )
         raise ValueError(
             f"Unsupported task_name '{cfg.task_name}'. "
-            "Expected 'target_position' or 'trajectory_tracking'."
+            "Expected 'target_position', 'trajectory_tracking', or 'unified_tracking'."
         )
 
     def _find_scene_handles(self):
@@ -505,4 +568,7 @@ class AerialBalanceEnv(DirectRLEnv):
         extras.update(self.robustness.get_state())
         if hasattr(self.task, "get_task_info"):
             extras.update(self.task.get_task_info())
-        return extras
+        # ``step()`` performs autoreset after this dictionary is created.  The
+        # command/task providers expose live buffers, so clone tensors here to
+        # keep terminal transition metadata tied to the episode that ended.
+        return {key: value.clone() if isinstance(value, torch.Tensor) else value for key, value in extras.items()}

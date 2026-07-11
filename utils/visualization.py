@@ -210,7 +210,13 @@ def _add_array_series(series: dict[str, np.ndarray], key: str, values: np.ndarra
 
 def _keys_for_group(group: str, rollout_data: dict[str, np.ndarray]) -> tuple[str, ...]:
     if group == "states":
-        return STATE_KEYS
+        observation_fields = tuple(
+            _decode_field_name(field) for field in rollout_data.get("observation_fields", np.asarray([]))
+        )
+        preview_fields = tuple(
+            field for field in observation_fields if field == "vg_0" or field.startswith(("pg_", "vg_"))
+        )
+        return tuple(dict.fromkeys((*STATE_KEYS, *preview_fields)))
     if group == "actions":
         return ACTION_COMMAND_KEYS
     if group == "policy":
@@ -383,6 +389,10 @@ def _label_for_key(key: str) -> str:
         return key.removeprefix("policy_").replace("_", " ")
     if key.startswith("step_"):
         return key.removeprefix("step_").replace("_", " ")
+    if key.startswith("pg_"):
+        return f"Reference position {key} (m)"
+    if key.startswith("vg_"):
+        return f"Reference velocity {key} (m/s)"
     return key.replace("_", " ")
 
 

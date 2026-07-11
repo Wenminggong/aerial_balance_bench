@@ -107,6 +107,13 @@ def _maybe_set_attrs(target: Any, values: dict[str, Any]):
             setattr(target, key, value)
 
 
+def _set_known_attrs(target: Any, values: dict[str, Any], section: str):
+    unknown = sorted(key for key in values if not hasattr(target, key))
+    if unknown:
+        raise ValueError(f"Unknown field(s) in {section}: {', '.join(unknown)}")
+    _maybe_set_attrs(target, values)
+
+
 def _resolve_seed(run_config: dict[str, Any], env_config: dict[str, Any]) -> int:
     if args_cli.seed is not None:
         seed = args_cli.seed
@@ -144,20 +151,32 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
 
     _maybe_set_attrs(env_cfg.target_position_task, config.get("target_position_task", config.get("task", {})))
     _maybe_set_attrs(env_cfg.trajectory_tracking_task, config.get("trajectory_tracking_task", {}))
+    _set_known_attrs(
+        env_cfg.unified_tracking_task,
+        config.get("unified_tracking_task", {}),
+        "unified_tracking_task",
+    )
+    _set_known_attrs(env_cfg.reference_preview, config.get("reference_preview", {}), "reference_preview")
     _maybe_set_attrs(env_cfg.velocity_interface, config.get("velocity_interface", {}))
     _maybe_set_attrs(env_cfg.position_interface, config.get("position_interface", {}))
     _maybe_set_attrs(env_cfg.thrust_interface, config.get("thrust_interface", {}))
     _maybe_set_attrs(env_cfg.robustness, config.get("robustness", {}))
     _maybe_set_attrs(env_cfg.target_position_evaluator, config.get("target_position_evaluator", config.get("evaluator", {})))
     _maybe_set_attrs(env_cfg.trajectory_tracking_evaluator, config.get("trajectory_tracking_evaluator", {}))
+    _set_known_attrs(
+        env_cfg.unified_tracking_evaluator,
+        config.get("unified_tracking_evaluator", {}),
+        "unified_tracking_evaluator",
+    )
     env_cfg.target_position_evaluator.episode_length_s = env_cfg.episode_length_s
     env_cfg.trajectory_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
+    env_cfg.unified_tracking_evaluator.episode_length_s = env_cfg.episode_length_s
     return env_cfg
 
 
 def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
-    if env_cfg.task_name != "target_position":
-        raise ValueError("RL training currently supports only task_name='target_position'.")
+    if env_cfg.task_name not in {"target_position", "unified_tracking"}:
+        raise ValueError("RL training supports task_name='target_position' or 'unified_tracking'.")
     if env_cfg.interface_name != "velocity":
         raise ValueError("RL training currently supports only interface_name='velocity'.")
 
@@ -213,6 +232,22 @@ def main():
 
     env_cfg = _build_env_cfg(env_config, seed)
     _validate_env_cfg(env_cfg)
+    predictor_delay_step = policy_cfg.state_predictor.delay_step
+    if isinstance(predictor_delay_step, str) and predictor_delay_step.lower() == "auto":
+        predictor_delay_step = (
+            env_cfg.robustness.delay_step
+            if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled
+            else 0
+        )
+    if (
+        policy_cfg.observation_mode == "reference_preview"
+        and policy_cfg.state_predictor.enabled
+        and int(predictor_delay_step) > 0
+    ):
+        raise ValueError(
+            "observation_mode='reference_preview' does not support an active state_predictor. "
+            "Disable state_predictor for unified tracking training."
+        )
     train_cfg = run_config.get("training", {})
     max_iterations = int(args_cli.max_iterations if args_cli.max_iterations is not None else train_cfg.get("max_iterations", 200))
 
@@ -237,7 +272,13 @@ def main():
         base_env = env.unwrapped
         physical_action_limit = float(base_env.action_space.high[0])
         adapter_cfg = RLObservationAdapterCfg(observation_mode=policy_cfg.observation_mode)
-        train_env = NormalizedRLTrainingWrapper(env, adapter_cfg, physical_action_limit)
+        train_env = NormalizedRLTrainingWrapper(
+            env,
+            adapter_cfg,
+            physical_action_limit,
+            raw_observation_dim=base_env.raw_observation_dim,
+            raw_observation_fields=base_env.observation_fields,
+        )
         skrl_env = wrap_env(env=train_env, wrapper="isaaclab", verbose=True)
 
         rollouts_cfg = train_cfg.get("rollouts", "auto")
@@ -305,6 +346,7 @@ def main():
             "headless": bool(args_cli.headless),
         }
         trainer = SequentialTrainer(cfg=trainer_cfg, env=skrl_env, agents=agent)
+        task_metadata = base_env.task.get_config_info() if hasattr(base_env.task, "get_config_info") else {}
         save_yaml(
             {
                 "seed": seed,
@@ -314,7 +356,13 @@ def main():
                 "interface_name": env_cfg.interface_name,
                 "algorithm": policy_cfg.algorithm,
                 "observation_mode": policy_cfg.observation_mode,
+                "raw_observation_dim": base_env.raw_observation_dim,
+                "observation_fields": list(base_env.observation_fields),
                 "policy_input_dim": train_env.adapter.input_dim,
+                "policy_input_fields": list(train_env.adapter.field_names),
+                "reference_preview_enabled": env_cfg.reference_preview.enabled,
+                "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
+                "reference_preview_offsets": list(base_env.reference_preview_offsets),
                 "physical_action_limit": physical_action_limit,
                 "max_iterations": max_iterations,
                 "trainer_timesteps": trainer_cfg["timesteps"],
@@ -322,6 +370,7 @@ def main():
                 "run_config_path": str(run_config_path),
                 "env_config_path": str(env_config_path),
                 "policy_config_path": str(policy_config_path),
+                **task_metadata,
             },
             output_dir / "resolved_run.yaml",
         )

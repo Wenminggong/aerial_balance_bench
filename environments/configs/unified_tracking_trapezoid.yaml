@@ -1,0 +1,67 @@
+task_name: unified_tracking
+interface_name: velocity
+
+env:
+  seed: 666
+  num_envs: 10
+  episode_length_s: 20.0
+  device: cuda:0
+
+unified_tracking_task:
+  trajectory_types: [trapezoid]
+  trajectory_type_weights: [1.0]
+  constant_goal_range: [0.10, 0.60]
+  dynamic_center_range: [0.25, 0.45]
+  amplitude_range: [0.05, 0.20]
+  period_range: [4.0, 10.0]
+  phase_range: [0.0, 6.283185307179586]
+  constant_initialization_mode: independent_uniform
+  dynamic_initialization_mode: on_reference
+  fixed_initial_ball_position: 0.35
+  initial_ball_position_range: [0.10, 0.60]
+  min_initial_reference_distance: 0.05
+  position_weight: 5.0
+  velocity_weight: 0.5
+  command_weight: 0.5
+  action_weight: 1.0
+  failure_penalty: 500.0
+  progress_weight: 1.0
+  max_error_for_failure: 0.5
+
+reference_preview:
+  enabled: true
+  future_steps: 5
+
+velocity_interface:
+  max_acc: 0.5
+  max_velocity: 0.0
+
+robustness:
+  enabled: false
+  ball_mass_variation_enabled: false
+  ball_mass_range: [0.0005, 0.0005]
+  recompute_ball_inertia: true
+  controller_gain_variation_enabled: false
+  controller_gain_range: [10.0, 10.0]
+  action_delay_enabled: false
+  delay_step: 0
+  external_disturbance_enabled: false
+  external_disturbance_ou_mu: 0.0
+  external_disturbance_ou_theta_range: [0.1, 0.3]
+  external_disturbance_ou_sigma_range: [0.01, 0.05]
+  external_disturbance_ou_clip: 0.05
+
+unified_tracking_evaluator:
+  num_eval_episodes: 1000
+  target_zone: 0.01
+  steady_state_window_s: 1.0
+
+runner:
+  target_episodes: 1000
+  max_steps: null
+  render: false
+  save_rollout: true
+
+logging:
+  root_dir: logs/zero_action/unified_tracking
+  run_name: zero_action_unified_tracking_trapezoid
