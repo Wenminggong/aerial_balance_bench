@@ -40,8 +40,8 @@ robustness:
   acceleration_response_max_abs_acc: 6.5
   external_disturbance_enabled: true
   external_disturbance_ou_mu: 0.0
-  external_disturbance_ou_theta_range: [0.2, 0.4]
-  external_disturbance_ou_sigma_range: [0.03, 0.07]
+  external_disturbance_ou_theta_range: [0.1, 0.3]
+  external_disturbance_ou_sigma_range: [0.0, 0.05]
   external_disturbance_ou_clip: 0.1
   observation_degradation_enabled: false
   obs_theta_noise_std: 0.001
