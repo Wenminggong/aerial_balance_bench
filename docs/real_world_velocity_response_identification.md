@@ -189,6 +189,32 @@ $$
 $L,\tau,K,c_\omega,c_\theta,c_{\dot u},b$。两个增广模型在初始化后都只使用模型自身的
 $\hat v[k-1]$，不会使用实际 $v[k-1]$；但它们要求仿真中能够获得梁的 $\theta,\omega$ 状态。
 
+## 仿真中的 FOPDT 命令响应
+
+鲁棒性管理器在现有固定步数动作延时之后提供可独立启用的速度响应阶段。其作用顺序为：
+
+```text
+command_velocity -> fixed-step delay -> first-order nominal response -> additive noise -> executed_velocity
+```
+
+一阶阶段使用 `env.step_dt` 和本节定义的指数离散化，仅处理垂直速度分量。`tau_s=0` 时直接退化为
+增益、偏置模型；关闭速度响应时保持延时后的命令不变。`tau_s`、`gain`、`bias`、噪声标准差以及
+OU 参数均以 `[min, max]` 配置，并在每个环境的 episode reset 时独立均匀采样；相等的上下限表示
+确定性参数。
+
+噪声模式支持 `none`、`gaussian`（兼容别名 `white`）和 `ou`。Gaussian 的标准差是逐步加性输出
+噪声的标准差；OU 使用精确离散化，其 `noise_std` 表示稳态标准差，`ou_theta` 的单位为 `s^-1`，
+`ou_mu` 的单位为 `m/s`。噪声在名义一阶状态之后相加，因此噪声与最终速度裁剪不会反馈到名义状态。
+
+`environments/configs/template_eval_velocity_response_realistic.yaml` 给出基于当前 RL 全数据 FOPDT
+辨识结果的确定性示例。由于现有延时队列只支持整数采样，该配置把 $L=0.120405$ s（60 Hz 下
+7.224 步）近似为 7 步；噪声默认关闭，因为当前辨识结果没有给出经过验证的 Gaussian/OU 参数。
+
+这里模拟的是低层速度控制器之前的命令响应，而不是直接覆盖仿真物理速度。实际 `vrz` 还包含现有
+SE(3) 速度控制器和飞行器动力学，因此启用后应同时检查原始命令、延时命令、名义响应、最终执行命令
+和实际 `vrz`，避免把真实整机辨识的时间常数与仿真本身的闭环惯性重复计算。现有 state predictor
+仍只补偿固定步数延时，不补偿该一阶响应。
+
 ## 数据处理与模型拟合方法
 
 ### 数据读取和对齐

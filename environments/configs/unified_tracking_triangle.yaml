@@ -45,6 +45,16 @@ robustness:
   controller_gain_range: [10.0, 10.0]
   action_delay_enabled: false
   delay_step: 0
+  velocity_response_enabled: false
+  velocity_response_tau_s_range: [0.0, 0.0]
+  velocity_response_gain_range: [1.0, 1.0]
+  velocity_response_bias_range: [0.0, 0.0]
+  velocity_response_noise_mode: none
+  velocity_response_noise_std_range: [0.0, 0.0]
+  velocity_response_ou_theta_range: [0.0, 0.0]
+  velocity_response_ou_mu_range: [0.0, 0.0]
+  velocity_response_noise_clip: 0.0
+  velocity_response_max_abs_velocity: 0.0
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0
   external_disturbance_ou_theta_range: [0.1, 0.3]

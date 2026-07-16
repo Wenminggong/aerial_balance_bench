@@ -11,7 +11,7 @@ The benchmark provides:
 - Two task families—target-position balancing and trajectory tracking—plus a unified reference-tracking representation for mixed-policy training
 - Three high-level command interfaces: thrust, velocity, and position
 - A Gym-style Isaac Lab environment with unified observations, actions, rewards, and evaluation metrics
-- Robustness tests for mass variation, low-level gain variation, action delay, and external disturbance
+- Robustness tests for mass variation, low-level gain variation, action delay, velocity-response dynamics, and external disturbance
 - Reference baselines for cascaded PID, nonlinear MPC, and model-free RL
 
 ## Contents
@@ -169,7 +169,10 @@ Robustness settings are configured under `robustness` in the environment YAML fi
 | Ball-mass variation | `ball_mass_variation_enabled`, `ball_mass_range` | Tests generalization to object parameter changes. |
 | Low-level gain variation | `controller_gain_variation_enabled`, `controller_gain_range` | Tests sensitivity to imperfect command tracking by the drone controller. |
 | Action delay | `action_delay_enabled`, `delay_step` | Inserts a fixed-step command delay between high-level output and executed command. |
+| Velocity response | `velocity_response_enabled`, FOPDT and noise parameters | Applies an independently sampled first-order response after the optional delay; supports no noise, Gaussian noise, or OU noise. |
 | External disturbance | `external_disturbance_enabled`, OU process parameters | Applies temporally correlated vertical motion at the otherwise fixed beam endpoint. |
+
+The delay and velocity-response stages are independent. With both enabled, the command passes through the fixed-step delay first and then the first-order response. Response parameter ranges are sampled independently for every environment at episode reset; equal range endpoints select deterministic parameters. The response model changes the velocity command sent to the existing low-level controller, so the simulated physical `vrz` also includes that controller and plant dynamics.
 
 ## User Guide
 
@@ -339,7 +342,7 @@ Common environment fields:
 | `unified_tracking_task` | Eligible reference types/weights, parameter ranges, independent initial-state modes, common reward, and failure threshold. |
 | `reference_preview` | Enables current/future desired position and velocity fields and sets the future control-step horizon. |
 | `velocity_interface`, `position_interface`, `thrust_interface` | Interface-specific action limits and low-level controller settings. |
-| `robustness` | Enables mass, gain, delay, and disturbance tests. |
+| `robustness` | Enables mass, gain, delay, velocity-response, and disturbance tests. |
 | `target_position_evaluator`, `trajectory_tracking_evaluator`, `unified_tracking_evaluator` | Evaluation episode count, tolerance, final-window settings, and task-specific aggregates. |
 | `runner` | Evaluation episode target, maximum rollout steps, rendering, and rollout saving. |
 | `logging` | Output root and run name. |
@@ -348,6 +351,7 @@ Template configs:
 
 - `environments/configs/target_position_balancing.yaml`
 - `environments/configs/trajectory_tracking.yaml`
+- `environments/configs/template_eval_velocity_response_realistic.yaml`
 - `environments/configs/unified_tracking_mixed.yaml`
 - `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid}.yaml`
 
@@ -388,6 +392,8 @@ The returned action must be a torch tensor with shape `(num_envs, 1)` on the env
 The reference baselines use the velocity-command interface. This gives the high-level controller a practical command abstraction, but also introduces latency because the low-level drone controller must track the commanded velocity.
 
 To compensate for action delay, the repository includes a model-based state predictor in `baselines/model_state_predictor.py`. Predictor-enabled configs, such as `cpid_predictor_15.yaml`, `nmpc_predictor_15.yaml`, and `rl_rpo_predictor_15.yaml`, use a velocity-interface model to predict the future observation after the configured delay horizon.
+
+The current predictor compensates only the configured integer action delay. Enabling the velocity-response model does not make the predictor response-aware; such runs therefore evaluate delay compensation under an additional unmodeled command-response dynamic.
 
 ### Baselines
 

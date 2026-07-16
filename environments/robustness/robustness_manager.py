@@ -8,6 +8,8 @@ from collections.abc import Sequence
 import torch
 from omni.isaac.lab.utils import configclass
 
+from .velocity_response import VelocityResponseModel
+
 
 class CommandDelayQueue:
     """Fixed-step per-environment command delay queue."""
@@ -57,6 +59,16 @@ class RobustnessManagerCfg:
     controller_gain_range: tuple[float, float] = (10.0, 10.0)
     action_delay_enabled: bool = False
     delay_step: int = 0
+    velocity_response_enabled: bool = False
+    velocity_response_tau_s_range: tuple[float, float] = (0.0, 0.0)
+    velocity_response_gain_range: tuple[float, float] = (1.0, 1.0)
+    velocity_response_bias_range: tuple[float, float] = (0.0, 0.0)
+    velocity_response_noise_mode: str = "none"
+    velocity_response_noise_std_range: tuple[float, float] = (0.0, 0.0)
+    velocity_response_ou_theta_range: tuple[float, float] = (0.0, 0.0)
+    velocity_response_ou_mu_range: tuple[float, float] = (0.0, 0.0)
+    velocity_response_noise_clip: float = 0.0
+    velocity_response_max_abs_velocity: float = 0.0
     external_disturbance_enabled: bool = False
     external_disturbance_ou_mu: float = 0.0
     external_disturbance_ou_theta_range: tuple[float, float] = (0.1, 0.3)
@@ -68,8 +80,9 @@ class RobustnessManager:
     """Hook object for reset-time randomization and step-time perturbations.
 
     This manager currently implements reset-time ball-mass variation,
-    low-level controller gain variation, command-level action delay, and
-    OU-process fixed-end external disturbances.
+    low-level controller gain variation, command-level action delay,
+    first-order velocity response, and OU-process fixed-end external
+    disturbances.
     """
 
     def __init__(self, cfg: RobustnessManagerCfg, num_envs: int, device: str | torch.device):
@@ -85,6 +98,33 @@ class RobustnessManager:
         self.action_delay_enabled = torch.full((num_envs,), float(self._action_delay_active()), device=self.device)
         self.delay_step = torch.full((num_envs,), float(max(int(cfg.delay_step), 0)), device=self.device)
         self.delayed_command_z = torch.full((num_envs,), float("nan"), device=self.device)
+        self.velocity_response_noise_mode = VelocityResponseModel.normalize_noise_mode(
+            cfg.velocity_response_noise_mode
+        )
+        self._validate_velocity_response_config()
+        self.velocity_response_model = VelocityResponseModel(num_envs, self.device)
+        self.velocity_response_enabled = torch.full(
+            (num_envs,),
+            float(self._velocity_response_active()),
+            device=self.device,
+        )
+        self.velocity_response_noise_mode_id = torch.full(
+            (num_envs,),
+            float(VelocityResponseModel.NOISE_MODE_IDS[self.velocity_response_noise_mode]),
+            device=self.device,
+        )
+        self.velocity_response_tau_s = self.velocity_response_model.tau_s
+        self.velocity_response_gain = self.velocity_response_model.gain
+        self.velocity_response_bias = self.velocity_response_model.bias
+        self.velocity_response_noise_std = self.velocity_response_model.noise_std
+        self.velocity_response_ou_theta = self.velocity_response_model.ou_theta
+        self.velocity_response_ou_mu = self.velocity_response_model.ou_mu
+        self.velocity_response_input_z = self.velocity_response_model.input_z
+        self.velocity_response_target_z = self.velocity_response_model.target_z
+        self.velocity_response_nominal_z = self.velocity_response_model.nominal_z
+        self.velocity_response_noise_z = self.velocity_response_model.noise_z
+        self.velocity_response_executed_z = self.velocity_response_model.executed_z
+        self.velocity_response_error_z = self.velocity_response_model.error_z
         self.external_disturbance_enabled = torch.full(
             (num_envs,),
             float(self._external_disturbance_active()),
@@ -113,6 +153,7 @@ class RobustnessManager:
             self._sync_controller_gain(env, env_ids)
 
         self._reset_action_delay(env, env_ids)
+        self._reset_velocity_response(env, env_ids)
         self._reset_external_disturbance(env, env_ids)
         return None
 
@@ -121,18 +162,20 @@ class RobustnessManager:
         return action
 
     def after_command_update(self, env, command: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Apply command-level action delay after the interface command update."""
-        if not self._action_delay_active():
-            self._sync_delayed_command_z(command)
-            return command
+        """Apply command-level action delay followed by optional velocity response."""
+        command_state = command
+        if self._action_delay_active():
+            current_command = env.control_interface.get_delay_command()
+            self._ensure_delay_queue(current_command)
+            delayed_command = self.delay_queue.step(current_command)
+            env.control_interface.set_executed_delay_command(delayed_command)
+            command_state = env.control_interface.get_command_state()
 
-        current_command = env.control_interface.get_delay_command()
-        self._ensure_delay_queue(current_command)
-        delayed_command = self.delay_queue.step(current_command)
-        env.control_interface.set_executed_delay_command(delayed_command)
-        delayed_state = env.control_interface.get_command_state()
-        self._sync_delayed_command_z(delayed_state)
-        return delayed_state
+        self._sync_delayed_command_z(command_state)
+        if not self._velocity_response_active():
+            self._sync_velocity_response_passthrough(command_state)
+            return command_state
+        return self._apply_velocity_response(env, command_state)
 
     def after_physics_step(self, env):
         """Apply step-time perturbations after each physics step."""
@@ -172,6 +215,20 @@ class RobustnessManager:
             "action_delay_enabled": self.action_delay_enabled,
             "delay_step": self.delay_step,
             "delayed_command_z": self.delayed_command_z,
+            "velocity_response_enabled": self.velocity_response_enabled,
+            "velocity_response_tau_s": self.velocity_response_tau_s,
+            "velocity_response_gain": self.velocity_response_gain,
+            "velocity_response_bias": self.velocity_response_bias,
+            "velocity_response_noise_mode_id": self.velocity_response_noise_mode_id,
+            "velocity_response_noise_std": self.velocity_response_noise_std,
+            "velocity_response_ou_theta": self.velocity_response_ou_theta,
+            "velocity_response_ou_mu": self.velocity_response_ou_mu,
+            "velocity_response_input_z": self.velocity_response_input_z,
+            "velocity_response_target_z": self.velocity_response_target_z,
+            "velocity_response_nominal_z": self.velocity_response_nominal_z,
+            "velocity_response_noise_z": self.velocity_response_noise_z,
+            "velocity_response_executed_z": self.velocity_response_executed_z,
+            "velocity_response_error_z": self.velocity_response_error_z,
             "external_disturbance_enabled": self.external_disturbance_enabled,
             "external_disturbance_vel_z": self.external_disturbance_vel_z[:, 0],
             "external_disturbance_ou_theta": self.external_disturbance_ou_theta[:, 0],
@@ -304,6 +361,193 @@ class RobustnessManager:
         self.action_delay_enabled[:] = float(self._action_delay_active())
         self.delay_step[:] = float(max(int(self.cfg.delay_step), 0))
         self.delayed_command_z[:] = command["executed_command_z"].to(device=self.device, dtype=torch.float32)
+
+    def _velocity_response_active(self) -> bool:
+        return bool(self.cfg.enabled and self.cfg.velocity_response_enabled)
+
+    def _reset_velocity_response(self, env, env_ids: torch.Tensor):
+        active = self._velocity_response_active()
+        if active:
+            self._require_velocity_interface(env)
+
+        self.velocity_response_enabled[env_ids] = float(active)
+        mode_id = VelocityResponseModel.NOISE_MODE_IDS[self.velocity_response_noise_mode] if active else 0
+        self.velocity_response_noise_mode_id[env_ids] = float(mode_id)
+
+        command = env.control_interface.get_command_state()
+        initial_z = command["executed_command_z"][env_ids].to(device=self.device, dtype=torch.float32)
+        count = int(env_ids.numel())
+        if active:
+            tau_s = self._sample_velocity_response_parameter(
+                count,
+                self.cfg.velocity_response_tau_s_range,
+                "velocity_response_tau_s_range",
+                lower_bound=0.0,
+            )
+            gain = self._sample_velocity_response_parameter(
+                count,
+                self.cfg.velocity_response_gain_range,
+                "velocity_response_gain_range",
+                lower_bound=0.0,
+                strict_lower=True,
+            )
+            bias = self._sample_velocity_response_parameter(
+                count,
+                self.cfg.velocity_response_bias_range,
+                "velocity_response_bias_range",
+            )
+            noise_std = self._sample_velocity_response_parameter(
+                count,
+                self.cfg.velocity_response_noise_std_range,
+                "velocity_response_noise_std_range",
+                lower_bound=0.0,
+            )
+            ou_theta = self._sample_velocity_response_parameter(
+                count,
+                self.cfg.velocity_response_ou_theta_range,
+                "velocity_response_ou_theta_range",
+                lower_bound=0.0,
+            )
+            ou_mu = self._sample_velocity_response_parameter(
+                count,
+                self.cfg.velocity_response_ou_mu_range,
+                "velocity_response_ou_mu_range",
+            )
+        else:
+            tau_s = torch.zeros(count, device=self.device)
+            gain = torch.ones(count, device=self.device)
+            bias = torch.zeros(count, device=self.device)
+            noise_std = torch.zeros(count, device=self.device)
+            ou_theta = torch.zeros(count, device=self.device)
+            ou_mu = torch.zeros(count, device=self.device)
+
+        self.velocity_response_model.reset(
+            env_ids,
+            initial_z,
+            tau_s=tau_s,
+            gain=gain,
+            bias=bias,
+            noise_std=noise_std,
+            ou_theta=ou_theta,
+            ou_mu=ou_mu,
+        )
+
+    def _apply_velocity_response(
+        self,
+        env,
+        command: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        self._require_velocity_interface(env)
+        step_dt = float(getattr(env, "step_dt", 0.0))
+        if step_dt <= 0.0:
+            raise ValueError("env.step_dt must be positive for velocity response integration.")
+        if "executed_velocity" not in command:
+            raise ValueError("Velocity response requires an 'executed_velocity' command state.")
+
+        response_command = command["executed_velocity"].to(device=self.device, dtype=torch.float32).clone()
+        executed_z = self.velocity_response_model.step(
+            response_command[:, 2],
+            step_dt,
+            self.velocity_response_noise_mode,
+            noise_clip=float(self.cfg.velocity_response_noise_clip),
+            max_abs_velocity=float(self.cfg.velocity_response_max_abs_velocity),
+        )
+        response_command[:, 2] = executed_z
+        self.velocity_response_enabled[:] = 1.0
+        self.velocity_response_noise_mode_id[:] = float(
+            VelocityResponseModel.NOISE_MODE_IDS[self.velocity_response_noise_mode]
+        )
+        env.control_interface.set_executed_delay_command(response_command)
+        return env.control_interface.get_command_state()
+
+    def _sync_velocity_response_passthrough(self, command: dict[str, torch.Tensor]):
+        input_z = command["executed_command_z"].to(device=self.device, dtype=torch.float32)
+        self.velocity_response_enabled[:] = 0.0
+        self.velocity_response_noise_mode_id[:] = 0.0
+        self.velocity_response_model.sync_passthrough(input_z)
+
+    def _require_velocity_interface(self, env):
+        if getattr(env.cfg, "interface_name", None) != "velocity":
+            raise ValueError("robustness.velocity_response_enabled requires interface_name='velocity'.")
+
+    def _validate_velocity_response_config(self):
+        self._velocity_response_bounds(
+            self.cfg.velocity_response_tau_s_range,
+            "velocity_response_tau_s_range",
+            lower_bound=0.0,
+        )
+        self._velocity_response_bounds(
+            self.cfg.velocity_response_gain_range,
+            "velocity_response_gain_range",
+            lower_bound=0.0,
+            strict_lower=True,
+        )
+        self._velocity_response_bounds(
+            self.cfg.velocity_response_bias_range,
+            "velocity_response_bias_range",
+        )
+        self._velocity_response_bounds(
+            self.cfg.velocity_response_noise_std_range,
+            "velocity_response_noise_std_range",
+            lower_bound=0.0,
+        )
+        self._velocity_response_bounds(
+            self.cfg.velocity_response_ou_theta_range,
+            "velocity_response_ou_theta_range",
+            lower_bound=0.0,
+        )
+        self._velocity_response_bounds(
+            self.cfg.velocity_response_ou_mu_range,
+            "velocity_response_ou_mu_range",
+        )
+        for field_name in ("velocity_response_noise_clip", "velocity_response_max_abs_velocity"):
+            value = float(getattr(self.cfg, field_name))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"robustness.{field_name} must be finite and non-negative.")
+
+    def _sample_velocity_response_parameter(
+        self,
+        count: int,
+        bounds: Sequence[float],
+        field_name: str,
+        *,
+        lower_bound: float | None = None,
+        strict_lower: bool = False,
+    ) -> torch.Tensor:
+        min_value, max_value = self._velocity_response_bounds(
+            bounds,
+            field_name,
+            lower_bound=lower_bound,
+            strict_lower=strict_lower,
+        )
+        unit = torch.rand(count, device=self.device)
+        return min_value + (max_value - min_value) * unit
+
+    @staticmethod
+    def _velocity_response_bounds(
+        bounds: Sequence[float],
+        field_name: str,
+        *,
+        lower_bound: float | None = None,
+        strict_lower: bool = False,
+    ) -> tuple[float, float]:
+        if not isinstance(bounds, Sequence) or isinstance(bounds, (str, bytes)) or len(bounds) != 2:
+            raise ValueError(f"robustness.{field_name} must contain exactly [min, max].")
+        min_value, max_value = (float(value) for value in bounds)
+        if not math.isfinite(min_value) or not math.isfinite(max_value):
+            raise ValueError(f"robustness.{field_name} values must be finite.")
+        if min_value > max_value:
+            raise ValueError(f"robustness.{field_name} must be ordered as [min, max].")
+        if lower_bound is not None:
+            if strict_lower:
+                invalid = min_value <= lower_bound or max_value <= lower_bound
+                relation = f"> {lower_bound:g}"
+            else:
+                invalid = min_value < lower_bound or max_value < lower_bound
+                relation = f">= {lower_bound:g}"
+            if invalid:
+                raise ValueError(f"robustness.{field_name} values must be {relation}.")
+        return min_value, max_value
 
     def _external_disturbance_active(self) -> bool:
         return bool(self.cfg.enabled and self.cfg.external_disturbance_enabled)
