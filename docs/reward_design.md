@@ -70,7 +70,7 @@ r_progress = hat{k}_6 (|e_{k-1}| - |e_k|)
 
 ## Unified Reference Tracking
 
-The `unified_tracking` task represents constant goals and sine, triangle, and trapezoid trajectories with one reward. It uses both position and reference-velocity error:
+The `unified_tracking` task represents constant goals, sine, triangle, trapezoid, random B-spline, and random ramp-dwell trajectories with one reward. It uses both position and reference-velocity error:
 
 ```text
 e_p,k = p_b(t_k) - p_g(t_k)

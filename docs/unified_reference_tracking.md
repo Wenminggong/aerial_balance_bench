@@ -1,6 +1,6 @@
 # Unified Reference Tracking
 
-This document specifies the `unified_tracking` task, its reference generator, reset distributions, observation preview, reward, evaluator, configuration files, and compatibility guarantees. The implementation treats target-position balancing as constant-reference tracking while keeping the original `target_position` and `trajectory_tracking` tasks unchanged.
+This document specifies the `unified_tracking` task, its reference generator, reset distributions, observation preview, reward, evaluator, configuration files, and compatibility guarantees. The implementation treats target-position balancing as constant-reference tracking and exposes two additional random families for held-out generalization evaluation.
 
 ## 1. Task model
 
@@ -12,14 +12,19 @@ pg_i(t) = c_i + A_i f_type_i(2 pi t / T_i + phi_i)
 
 where `c` is the center, `A` is the amplitude, `T` is the period, and `phi` is the initial phase. The supported reference types and stable IDs are:
 
-| Type | ID | Normalized wave `f(x)` | Notes |
+| Type | ID | Reference form | Notes |
 | --- | ---: | --- | --- |
 | `sine` | `0` | `sin(x)` | Smooth periodic reference. |
 | `triangle` | `1` | Piecewise-linear triangle wave in `[-1, 1]` | Continuous position with slope changes at extrema. |
 | `trapezoid` | `2` | `clip(2 triangle(x), -1, 1)` | Alternates between constant plateaus and linear ramps. |
 | `constant` | `3` | `0` | `A` is forced to zero, so `pg(t) = c`. |
+| `random_b_spline` | `4` | Clamped B-spline control polygon | Smooth finite-duration held-out reference. |
+| `random_ramp_dwell` | `5` | Random linear ramps and constant dwells | Continuous but non-smooth finite-duration held-out reference. |
 
-The type ID mapping is part of the rollout and metric contract. Do not renumber existing IDs when adding another reference family.
+The analytic expression above applies to the periodic and constant families.
+The two random families use per-environment buffers sampled at reset. The type
+ID mapping is part of the rollout and metric contract; IDs `0` through `3`
+remain unchanged.
 
 The triangle wave exactly follows the legacy trajectory generator. With `q = remainder(x + pi/2, 2 pi)`:
 
@@ -36,7 +41,7 @@ Reference velocity is the one-control-step forward finite difference used by the
 vg(t_k) = (pg(t_k + dt) - pg(t_k)) / dt
 ```
 
-`dt` is the environment control period (`decimation * sim.dt`), not the raw physics step. Consequently, constant references always have `vg = 0`; triangle and trapezoid velocities reflect their discrete slope and corner behavior.
+`dt` is the environment control period (`decimation * sim.dt`), not the raw physics step. Consequently, constant references always have `vg = 0`; triangle, trapezoid, and ramp-dwell velocities reflect their discrete slope and corner behavior. Both finite-duration random references hold their final position after the configured duration, so their subsequent velocity is zero.
 
 ## 2. Sampling and reset behavior
 
@@ -55,6 +60,37 @@ Every reset samples and stores one type and its parameters per selected environm
 | `phase_range` | `[0, 2 pi]` | Uniform initial phase range in radians for dynamic references. |
 
 For a sampled constant reference, the logged center is the sampled goal and the implementation stores the canonical placeholders `amplitude = 0`, `period = 1`, and `phase = 0`.
+
+### Random B-spline fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `random_b_spline_degree` | `3` | B-spline degree; must be at least one and smaller than the control-point count. |
+| `random_b_spline_num_control_points` | `6` | Fixed control-point count. |
+| `random_b_spline_duration_s` | `20.0` | Duration covered by the open-uniform clamped knot vector. |
+| `random_b_spline_position_range` | `[0.10, 0.60]` | Uniform range for intermediate control-point positions. |
+| `random_b_spline_start_position` | `0.35` | Fixed first control point and exact initial reference. |
+| `random_b_spline_end_position` | `0.35` | Fixed final control point and held terminal reference. |
+
+The generator evaluates the B-spline directly in PyTorch. Because the curve is
+a convex combination of its control points, a valid control-point range keeps
+the full curve inside the beam bounds without clipping and preserves its
+smoothness.
+
+### Random ramp-dwell fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `random_ramp_dwell_num_segments` | `5` | Fixed number of ramp/dwell pairs. |
+| `random_ramp_dwell_duration_s` | `20.0` | Total generated duration. |
+| `random_ramp_dwell_start_position` | `0.35` | Initial reference position. |
+| `random_ramp_dwell_target_ranges` | `[[0.10, 0.30], [0.40, 0.60]]` | Candidate target bands; one is selected uniformly and sampled for each segment. |
+| `random_ramp_duration_range` | `[1.0, 3.0]` | Uniform ramp-duration range in seconds. |
+| `random_dwell_duration_range` | `[0.0, 4.0]` | Uniform dwell-duration range in seconds. |
+
+Each segment starts from the previous segment's achieved position. A segment
+crossing the configured total duration is truncated consistently, and the
+reference holds the resulting final value thereafter.
 
 Setting both ends of any range to the same value makes that parameter fixed. For example, a fixed sine experiment can use:
 
@@ -88,7 +124,7 @@ Environment seeding controls task sampling. Reproducibility therefore requires t
 
 ## 3. Reward and termination
 
-All four reference types use the same reward:
+All six reference types use the same reward:
 
 ```text
 ep_k = pb_k - pg_k
@@ -177,14 +213,14 @@ The unified evaluator always exposes a stable metric schema:
 | Group | Exact keys |
 | --- | --- |
 | Global | `completed_episodes`, `evaluation_complete`, `mean_absolute_error`, `root_mean_square_error`, `maximum_absolute_error` |
-| Per type | `<type>_completed_episodes`, `<type>_mean_absolute_error`, `<type>_root_mean_square_error`, `<type>_maximum_absolute_error` for each of the four type names |
+| Per type | `<type>_completed_episodes`, `<type>_mean_absolute_error`, `<type>_root_mean_square_error`, `<type>_maximum_absolute_error` for each of the six type names |
 | Constant regulation | `constant_success_rate`, `constant_steady_state_error`, `constant_steady_state_error_std`, `constant_convergence_time`, `constant_convergence_time_std`, `constant_climbing_time`, `constant_climbing_time_std` |
 
 Per-type position-error metrics are episode averages and are then averaged across completed episodes of that type. If a type has no completed episodes, its count is zero and its numeric metrics are `NaN`, not zero. A constant metric standard deviation is zero with one completed constant episode and `NaN` with none. This makes missing coverage visible in mixed runs.
 
 Evaluator configuration uses `num_eval_episodes` for `evaluation_complete`, `target_zone` for constant-reference entry/success tests, and `steady_state_window_s` for the final rolling absolute-error window. `constant_climbing_time` is the first target-zone entry. `constant_convergence_time` is the start of the final uninterrupted in-zone interval; an episode is successful when such an interval exists before the time limit.
 
-The mixed evaluator is useful for sampling/coverage checks and a training-distribution aggregate. Policy comparisons should use the four singleton configs so every reported run has an unambiguous reference family and controlled episode count.
+The mixed evaluator is useful for sampling/coverage checks and a training-distribution aggregate. Policy comparisons should use singleton configs so every reported run has an unambiguous reference family and controlled episode count. The supplied mixed config deliberately remains a four-family distribution; the two random singleton configs are held out for generalization tests.
 
 Each step exposes these sampled task fields for logging and audit:
 
@@ -206,12 +242,21 @@ initial_ball_position
 | `environments/configs/unified_tracking_sine.yaml` | Sine-reference evaluation. |
 | `environments/configs/unified_tracking_triangle.yaml` | Triangle-reference evaluation. |
 | `environments/configs/unified_tracking_trapezoid.yaml` | Trapezoid-reference evaluation. |
+| `environments/configs/unified_tracking_random_b_spline.yaml` | Held-out smooth random B-spline evaluation. |
+| `environments/configs/unified_tracking_random_ramp_dwell.yaml` | Held-out non-smooth random ramp-dwell evaluation. |
 | `baselines/configs/rl_rpo_reference_preview_train.yaml` | RPO training policy using preview observations. |
 | `baselines/configs/rl_rpo_reference_preview_eval.yaml` | Deterministic preview-policy evaluation template. |
 | `baselines/configs/rl_unified_tracking_rpo_train.yaml` | Complete mixed RPO training run. |
 | `baselines/configs/rl_unified_tracking_rpo_eval.yaml` | Complete RL evaluation run; switch singleton env with `--env_config`. |
+| `baselines/configs/nffb_unified_tracking_eval.yaml` | Delay-free NFFB evaluation run; switch singleton env with `--env_config`. |
+| `baselines/configs/nffb_sine_tuning.yaml` | Resumable phase-zero sine bandwidth search, stress tests, ablation, and validation. |
 
 The mixed and singleton configs share the same dynamic-parameter ranges and `H = 5` layout. They differ only in eligible reference types, evaluation scale, and log names.
+
+The NFFB tuning config deliberately specializes the sine singleton to
+`phase=0`, `max_acc=5.0 m/s^2`, and `max_velocity=0`. It does not change the
+reference generator or evaluator; generated fixed-profile configs exist only
+under the ignored tuning log directory.
 
 ### Zero-action smoke tests
 
@@ -228,7 +273,7 @@ python3 scripts/zero_action_policy_eval.py \
 Run all singleton smoke tests:
 
 ```bash
-for type in constant sine triangle trapezoid; do
+for type in constant sine triangle trapezoid random_b_spline random_ramp_dwell; do
   python3 scripts/zero_action_policy_eval.py \
     --config "environments/configs/unified_tracking_${type}.yaml" \
     --episodes 4 \
@@ -282,6 +327,7 @@ Use a new logging root/run name when changing metric schemas or experimental dis
 | Existing RL checkpoints | Unchanged with their original mode/config | Not automatically transferable | Preview checkpoint requires matching `H` |
 | CPID runner/policy | Supported for its existing task paths | Not supported | Not modified |
 | NMPC runner/policy | Supported for its existing task paths | Not supported | Not modified |
+| NFFB runner/policy | Not exposed on legacy tasks | Supported with velocity interface | Requires at least `H = 1`; delay-free only |
 | Velocity state predictor | Existing legacy combinations unchanged | Legacy-layout behavior only | Not supported with `reference_preview` mode |
 
 No existing environment YAML is migrated. `target_position`, `trajectory_tracking`, the 11-D default observation, legacy evaluator keys, and legacy checkpoint input dimensions remain intact.

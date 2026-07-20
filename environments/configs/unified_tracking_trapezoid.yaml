@@ -11,10 +11,10 @@ unified_tracking_task:
   trajectory_types: [trapezoid]
   trajectory_type_weights: [1.0]
   constant_goal_range: [0.10, 0.60]
-  dynamic_center_range: [0.25, 0.45]
-  amplitude_range: [0.05, 0.20]
+  dynamic_center_range: [0.3, 0.4]
+  amplitude_range: [0.10, 0.25]
   period_range: [4.0, 10.0]
-  phase_range: [0.0, 6.283185307179586]
+  phase_range: [0.0, 0.0]
   constant_initialization_mode: independent_uniform
   dynamic_initialization_mode: on_reference
   fixed_initial_ball_position: 0.35
@@ -33,7 +33,7 @@ reference_preview:
   future_steps: 5
 
 velocity_interface:
-  max_acc: 0.5
+  max_acc: 5.0
   max_velocity: 0.0
 
 robustness:

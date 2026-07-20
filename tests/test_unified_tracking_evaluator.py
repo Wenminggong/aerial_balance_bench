@@ -54,6 +54,8 @@ def test_metric_schema_is_stable_and_empty_categories_are_nan():
     assert metrics["completed_episodes"].item() == 0.0
     assert not metrics["evaluation_complete"].item()
     assert math.isnan(metrics["triangle_mean_absolute_error"].item())
+    assert math.isnan(metrics["random_b_spline_mean_absolute_error"].item())
+    assert math.isnan(metrics["random_ramp_dwell_mean_absolute_error"].item())
     assert math.isnan(metrics["constant_success_rate"].item())
 
 
@@ -115,6 +117,30 @@ def test_episode_reset_only_clears_selected_environments():
     assert evaluator.climbing_time[2].item() == pytest.approx(0.3)
 
 
+def test_held_out_type_metrics_are_aggregated_by_stable_id():
+    evaluator = make_evaluator()
+    type_ids = torch.tensor(
+        [
+            TRAJECTORY_TYPE_TO_ID["random_b_spline"],
+            TRAJECTORY_TYPE_TO_ID["random_ramp_dwell"],
+        ],
+        dtype=torch.long,
+    )
+
+    metrics = evaluator.update(
+        {"pb": torch.tensor([0.1, 0.2]), "pg": torch.zeros(2)},
+        terminated=torch.zeros(2, dtype=torch.bool),
+        time_outs=torch.ones(2, dtype=torch.bool),
+        episode_length_buf=torch.ones(2, dtype=torch.long),
+        trajectory_type_id=type_ids,
+    )
+
+    assert metrics["random_b_spline_completed_episodes"].item() == 1.0
+    assert metrics["random_ramp_dwell_completed_episodes"].item() == 1.0
+    assert metrics["random_b_spline_mean_absolute_error"].item() == pytest.approx(0.1)
+    assert metrics["random_ramp_dwell_mean_absolute_error"].item() == pytest.approx(0.2)
+
+
 def test_update_rejects_unknown_type_ids_and_wrong_shapes():
     evaluator = make_evaluator()
     state = {"pb": torch.zeros(2), "pg": torch.zeros(2)}
@@ -125,4 +151,3 @@ def test_update_rejects_unknown_type_ids_and_wrong_shapes():
         evaluator.update(state, zeros, zeros, lengths, torch.tensor([0, 99]))
     with pytest.raises(ValueError, match="shape"):
         evaluator.update(state, zeros, zeros, lengths, torch.tensor([0]))
-

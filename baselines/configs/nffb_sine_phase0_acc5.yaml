@@ -1,0 +1,32 @@
+policy_name: nffb_sine_phase0_acc5
+
+model:
+  plank_length: auto
+  rope_length: auto
+  ball_position_offset: auto
+  gravity: auto
+  ball_mass: auto
+  ball_radius: auto
+  ball_inertia_ratio: 0.4
+  epsilon: 1.0e-6
+
+outer_loop:
+  natural_frequency: 1.35
+  damping_ratio: 1.0
+  integral_pole: 0.0
+  integral_limit: 0.25
+  acceleration_feedforward_enabled: true
+
+command_filter:
+  natural_frequency: 16.0
+  damping_ratio: 1.0
+
+inner_loop:
+  k_theta: 6.0
+
+constraints:
+  theta_max: 0.6981317007977318
+  omega_max: 0.5
+  max_acc: auto
+  max_velocity: auto
+  max_reference_acceleration: auto

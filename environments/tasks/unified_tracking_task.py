@@ -9,13 +9,12 @@ import operator
 import torch
 from omni.isaac.lab.utils import configclass
 
+from .random_reference_trajectories import (
+    PERIODIC_TRAJECTORY_TYPES,
+    TRAJECTORY_TYPE_TO_ID,
+    RandomReferenceTrajectories,
+)
 
-TRAJECTORY_TYPE_TO_ID = {
-    "sine": 0,
-    "triangle": 1,
-    "trapezoid": 2,
-    "constant": 3,
-}
 ID_TO_TRAJECTORY_TYPE = {value: key for key, value in TRAJECTORY_TYPE_TO_ID.items()}
 INITIALIZATION_MODES = {"fixed", "on_reference", "independent_uniform"}
 
@@ -32,6 +31,23 @@ class UnifiedTrackingTaskCfg:
     amplitude_range: tuple[float, float] = (0.05, 0.20)
     period_range: tuple[float, float] = (4.0, 10.0)
     phase_range: tuple[float, float] = (0.0, 2.0 * math.pi)
+
+    random_b_spline_degree: int = 3
+    random_b_spline_num_control_points: int = 6
+    random_b_spline_duration_s: float = 20.0
+    random_b_spline_position_range: tuple[float, float] = (0.10, 0.60)
+    random_b_spline_start_position: float = 0.35
+    random_b_spline_end_position: float = 0.35
+
+    random_ramp_dwell_num_segments: int = 5
+    random_ramp_dwell_duration_s: float = 20.0
+    random_ramp_dwell_start_position: float = 0.35
+    random_ramp_dwell_target_ranges: tuple[tuple[float, float], ...] = (
+        (0.10, 0.30),
+        (0.40, 0.60),
+    )
+    random_ramp_duration_range: tuple[float, float] = (1.0, 3.0)
+    random_dwell_duration_range: tuple[float, float] = (0.0, 4.0)
 
     constant_initialization_mode: str = "independent_uniform"
     dynamic_initialization_mode: str = "on_reference"
@@ -71,6 +87,13 @@ class UnifiedTrackingTask:
         self.step_dt = float(step_dt)
         self.beam_position_min = float(beam_position_min)
         self.beam_position_max = float(beam_position_max)
+        self.random_references = RandomReferenceTrajectories(
+            cfg,
+            self.num_envs,
+            self.device,
+            self.beam_position_min,
+            self.beam_position_max,
+        )
 
         self._validate_config()
 
@@ -126,11 +149,24 @@ class UnifiedTrackingTask:
         sampled_amplitude[constant_mask] = 0.0
         sampled_period[constant_mask] = 1.0
         sampled_phase[constant_mask] = 0.0
+        random_mask = (
+            (sampled_ids == TRAJECTORY_TYPE_TO_ID["random_b_spline"])
+            | (sampled_ids == TRAJECTORY_TYPE_TO_ID["random_ramp_dwell"])
+        )
+        sampled_center[random_mask] = torch.where(
+            sampled_ids[random_mask] == TRAJECTORY_TYPE_TO_ID["random_b_spline"],
+            torch.full_like(sampled_center[random_mask], self.cfg.random_b_spline_start_position),
+            torch.full_like(sampled_center[random_mask], self.cfg.random_ramp_dwell_start_position),
+        )
+        sampled_amplitude[random_mask] = 0.0
+        sampled_period[random_mask] = 1.0
+        sampled_phase[random_mask] = 0.0
 
         self.center[env_ids] = sampled_center
         self.amplitude[env_ids] = sampled_amplitude
         self.period[env_ids] = sampled_period
         self.phase[env_ids] = sampled_phase
+        self.random_references.sample_reset(env_ids, sampled_ids)
 
         initial_reference = self.get_reference(torch.zeros(self.num_envs, device=self.device))[0][env_ids]
         initial_position = torch.empty(count, dtype=torch.float32, device=self.device)
@@ -226,11 +262,13 @@ class UnifiedTrackingTask:
 
     def get_config_info(self) -> dict[str, object]:
         """Return JSON-serializable sampling metadata."""
-        return {
+        config_info = {
             "trajectory_type_to_id": dict(TRAJECTORY_TYPE_TO_ID),
             "trajectory_types": list(self._configured_trajectory_types),
             "normalized_trajectory_type_weights": self._normalized_type_weights.cpu().tolist(),
         }
+        config_info.update(self.random_references.get_config_info())
+        return config_info
 
     def _reference_position(self, t: torch.Tensor) -> torch.Tensor:
         parameter_shape = (self.num_envs,) + (1,) * (t.ndim - 1)
@@ -250,7 +288,15 @@ class UnifiedTrackingTask:
             torch.clamp(2.0 * triangle, -1.0, 1.0),
             waveform,
         )
-        return center + amplitude * waveform
+        position = center + amplitude * waveform
+        random_mask = (
+            (type_id == TRAJECTORY_TYPE_TO_ID["random_b_spline"])
+            | (type_id == TRAJECTORY_TYPE_TO_ID["random_ramp_dwell"])
+        )
+        if torch.any(random_mask):
+            random_position = self.random_references.get_position(t, self.trajectory_type_id)
+            position = torch.where(random_mask, random_position, position)
+        return position
 
     def _sample_initial_positions(
         self,
@@ -405,7 +451,13 @@ class UnifiedTrackingTask:
             raise ValueError("period_range must be strictly positive.")
         if goal_low < self.beam_position_min or goal_high > self.beam_position_max:
             raise ValueError("constant_goal_range must lie within the beam position bounds.")
-        if center_low - amplitude_high < self.beam_position_min or center_high + amplitude_high > self.beam_position_max:
+        if (
+            any(name in PERIODIC_TRAJECTORY_TYPES for name in trajectory_types)
+            and (
+                center_low - amplitude_high < self.beam_position_min
+                or center_high + amplitude_high > self.beam_position_max
+            )
+        ):
             raise ValueError(
                 "Every dynamic reference must lie within the beam position bounds; "
                 "adjust dynamic_center_range or amplitude_range."
@@ -427,10 +479,46 @@ class UnifiedTrackingTask:
             raise ValueError("min_initial_reference_distance must be finite and non-negative.")
         if "constant" in trajectory_types and self.cfg.constant_initialization_mode == "independent_uniform":
             self._validate_initial_distance_feasibility(goal_low, goal_high, initial_low, initial_high, distance)
-        if any(name != "constant" for name in trajectory_types) and self.cfg.dynamic_initialization_mode == "independent_uniform":
+        if (
+            any(name != "constant" for name in trajectory_types)
+            and self.cfg.dynamic_initialization_mode == "independent_uniform"
+        ):
+            dynamic_reference_ranges: list[tuple[float, float]] = []
+            if any(name in PERIODIC_TRAJECTORY_TYPES for name in trajectory_types):
+                dynamic_reference_ranges.append(
+                    (center_low - amplitude_high, center_high + amplitude_high)
+                )
+            if "random_b_spline" in trajectory_types:
+                dynamic_reference_ranges.append(
+                    (
+                        min(
+                            self.random_references.b_spline_position_range[0],
+                            self.random_references.b_spline_start_position,
+                            self.random_references.b_spline_end_position,
+                        ),
+                        max(
+                            self.random_references.b_spline_position_range[1],
+                            self.random_references.b_spline_start_position,
+                            self.random_references.b_spline_end_position,
+                        ),
+                    )
+                )
+            if "random_ramp_dwell" in trajectory_types:
+                dynamic_reference_ranges.append(
+                    (
+                        min(
+                            self.random_references.ramp_dwell_start_position,
+                            *(value_range[0] for value_range in self.random_references.ramp_dwell_target_ranges),
+                        ),
+                        max(
+                            self.random_references.ramp_dwell_start_position,
+                            *(value_range[1] for value_range in self.random_references.ramp_dwell_target_ranges),
+                        ),
+                    )
+                )
             self._validate_initial_distance_feasibility(
-                center_low - amplitude_high,
-                center_high + amplitude_high,
+                min(value_range[0] for value_range in dynamic_reference_ranges),
+                max(value_range[1] for value_range in dynamic_reference_ranges),
                 initial_low,
                 initial_high,
                 distance,

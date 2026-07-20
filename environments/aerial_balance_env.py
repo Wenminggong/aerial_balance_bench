@@ -394,7 +394,14 @@ class AerialBalanceEnv(DirectRLEnv):
             )
         if cfg.task_name == "trajectory_tracking":
             return (
-                TrajectoryTrackingTask(cfg.trajectory_tracking_task, self.num_envs, self.device, self.step_dt),
+                TrajectoryTrackingTask(
+                    cfg.trajectory_tracking_task,
+                    self.num_envs,
+                    self.device,
+                    self.step_dt,
+                    cfg.beam_position_min,
+                    cfg.beam_position_max,
+                ),
                 TrajectoryTrackingEvaluator(
                     cfg.trajectory_tracking_evaluator,
                     self.num_envs,

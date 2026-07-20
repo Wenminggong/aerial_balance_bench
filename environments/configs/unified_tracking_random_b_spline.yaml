@@ -8,13 +8,25 @@ env:
   device: cuda:0
 
 unified_tracking_task:
-  trajectory_types: [triangle]
+  trajectory_types: [random_b_spline]
   trajectory_type_weights: [1.0]
   constant_goal_range: [0.10, 0.60]
   dynamic_center_range: [0.3, 0.4]
   amplitude_range: [0.10, 0.25]
   period_range: [4.0, 10.0]
   phase_range: [0.0, 0.0]
+  random_b_spline_degree: 3
+  random_b_spline_num_control_points: 6
+  random_b_spline_duration_s: 20.0
+  random_b_spline_position_range: [0.10, 0.60]
+  random_b_spline_start_position: 0.35
+  random_b_spline_end_position: 0.35
+  random_ramp_dwell_num_segments: 5
+  random_ramp_dwell_duration_s: 20.0
+  random_ramp_dwell_start_position: 0.35
+  random_ramp_dwell_target_ranges: [[0.10, 0.30], [0.40, 0.60]]
+  random_ramp_duration_range: [1.0, 3.0]
+  random_dwell_duration_range: [0.0, 4.0]
   constant_initialization_mode: independent_uniform
   dynamic_initialization_mode: on_reference
   fixed_initial_ball_position: 0.35
@@ -74,4 +86,4 @@ runner:
 
 logging:
   root_dir: logs/zero_action/unified_tracking
-  run_name: zero_action_unified_tracking_triangle
+  run_name: zero_action_unified_tracking_random_b_spline

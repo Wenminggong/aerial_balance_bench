@@ -8,12 +8,17 @@ import math
 import torch
 from omni.isaac.lab.utils import configclass
 
+from .random_reference_trajectories import (
+    PERIODIC_TRAJECTORY_TYPES,
+    TRAJECTORY_TYPE_TO_ID as GLOBAL_TRAJECTORY_TYPE_TO_ID,
+    RandomReferenceTrajectories,
+)
 
 TRAJECTORY_TYPE_TO_ID = {
-    "sine": 0,
-    "triangle": 1,
-    "trapezoid": 2,
+    name: GLOBAL_TRAJECTORY_TYPE_TO_ID[name]
+    for name in (*PERIODIC_TRAJECTORY_TYPES, "random_b_spline", "random_ramp_dwell")
 }
+LEGACY_RANDOM_TRAJECTORY_TYPES = PERIODIC_TRAJECTORY_TYPES
 
 
 @configclass
@@ -29,6 +34,23 @@ class TrajectoryTrackingTaskCfg:
     period_range: tuple[float, float] = (6.0, 10.0)
     random_amplitude: bool = False
     random_period: bool = False
+
+    random_b_spline_degree: int = 3
+    random_b_spline_num_control_points: int = 6
+    random_b_spline_duration_s: float = 20.0
+    random_b_spline_position_range: tuple[float, float] = (0.10, 0.60)
+    random_b_spline_start_position: float = 0.35
+    random_b_spline_end_position: float = 0.35
+
+    random_ramp_dwell_num_segments: int = 5
+    random_ramp_dwell_duration_s: float = 20.0
+    random_ramp_dwell_start_position: float = 0.35
+    random_ramp_dwell_target_ranges: tuple[tuple[float, float], ...] = (
+        (0.10, 0.30),
+        (0.40, 0.60),
+    )
+    random_ramp_duration_range: tuple[float, float] = (1.0, 3.0)
+    random_dwell_duration_range: tuple[float, float] = (0.0, 4.0)
 
     position_weight: float = 5.0
     velocity_weight: float = 0.5
@@ -48,6 +70,8 @@ class TrajectoryTrackingTask:
         num_envs: int,
         device: str | torch.device,
         step_dt: float,
+        beam_position_min: float = 0.0,
+        beam_position_max: float = 0.70,
     ):
         self.cfg = cfg
         self.num_envs = num_envs
@@ -63,6 +87,13 @@ class TrajectoryTrackingTask:
         self.amplitude = torch.full((num_envs,), cfg.amplitude, device=self.device)
         self.period = torch.full((num_envs,), cfg.period, device=self.device)
         self.previous_abs_error = torch.zeros(num_envs, device=self.device)
+        self.random_references = RandomReferenceTrajectories(
+            cfg,
+            num_envs,
+            self.device,
+            beam_position_min,
+            beam_position_max,
+        )
 
     def sample_reset(self, env, env_ids: Sequence[int] | torch.Tensor):
         """Sample trajectory parameters and reset the ball at the center."""
@@ -83,6 +114,7 @@ class TrajectoryTrackingTask:
             sample_random=self.cfg.random_period or self.cfg.trajectory_type == "random",
             size=env_ids.numel(),
         )
+        self.random_references.sample_reset(env_ids, self.trajectory_type_id)
 
         initial_position = torch.full((env_ids.numel(),), self.cfg.initial_ball_position, device=self.device)
         env.set_ball_position_along_beam(env_ids, initial_position)
@@ -154,11 +186,24 @@ class TrajectoryTrackingTask:
             triangle = self._triangle_wave(phase[trapezoid_mask])
             trapezoid = torch.clamp(triangle * 2.0, -1.0, 1.0)
             wave[trapezoid_mask] = self.amplitude[trapezoid_mask] * trapezoid
-        return self.cfg.center_position + wave
+        position = self.cfg.center_position + wave
+        random_mask = (self.trajectory_type_id == TRAJECTORY_TYPE_TO_ID["random_b_spline"]) | (
+            self.trajectory_type_id == TRAJECTORY_TYPE_TO_ID["random_ramp_dwell"]
+        )
+        if torch.any(random_mask):
+            random_position = self.random_references.get_position(t, self.trajectory_type_id)
+            position = torch.where(random_mask, random_position, position)
+        return position
 
     def _sample_trajectory_type(self, size: int) -> torch.Tensor:
         if self.cfg.trajectory_type == "random":
-            return torch.randint(0, len(TRAJECTORY_TYPE_TO_ID), (size,), device=self.device)
+            legacy_ids = torch.tensor(
+                [TRAJECTORY_TYPE_TO_ID[name] for name in LEGACY_RANDOM_TRAJECTORY_TYPES],
+                dtype=torch.long,
+                device=self.device,
+            )
+            sampled_indices = torch.randint(0, len(legacy_ids), (size,), device=self.device)
+            return legacy_ids[sampled_indices]
         trajectory_id = self._trajectory_type_to_id(self.cfg.trajectory_type)
         return torch.full((size,), trajectory_id, dtype=torch.long, device=self.device)
 

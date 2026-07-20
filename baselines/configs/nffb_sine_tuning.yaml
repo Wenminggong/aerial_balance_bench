@@ -1,0 +1,115 @@
+base_run_config: baselines/configs/nffb_unified_tracking_eval.yaml
+base_env_config: environments/configs/unified_tracking_sine.yaml
+base_policy_config: baselines/configs/nffb.yaml
+
+output_root: logs/nffb/sine_tuning
+session_name: phase0_acc5
+
+experiment:
+  episode_length_s: 20.0
+
+screen:
+  seed: 666
+  num_envs: 32
+  episodes: 32
+
+search:
+  recommended:
+    outer_omega: 2.0
+    outer_zeta: 1.1
+    filter_omega: 9.0
+    filter_zeta: 1.0
+    k_theta: 16.0
+    omega_max: 0.5
+  filter_inner_pairs:
+    - [6.0, 10.0]
+    - [6.0, 14.0]
+    - [8.0, 12.0]
+    - [8.0, 16.0]
+    - [10.0, 16.0]
+    - [10.0, 20.0]
+    - [12.0, 20.0]
+    - [12.0, 24.0]
+  outer_frequencies: [1.0, 1.5, 2.0, 2.5, 3.0]
+  outer_damping_ratios: [0.9, 1.1, 1.3]
+  local_outer_damping_ratios: [1.025, 1.05, 1.075]
+  safe_fallback_filter_frequencies: [10.0, 8.0]
+  recovery_filter_inner_pairs:
+    - [10.0, 8.0]
+    - [10.0, 10.0]
+    - [12.0, 8.0]
+    - [12.0, 10.0]
+  recovery_outer_filter_inner_candidates:
+    - [1.25, 10.0, 10.0]
+    - [1.50, 10.0, 10.0]
+    - [1.25, 12.0, 8.0]
+    - [1.25, 12.0, 10.0]
+    - [1.50, 12.0, 8.0]
+    - [1.50, 12.0, 10.0]
+    - [1.60, 12.0, 8.0]
+    - [1.70, 12.0, 8.0]
+    - [1.00, 14.0, 6.0]
+    - [1.25, 14.0, 6.0]
+    - [1.25, 14.0, 8.0]
+    - [1.40, 14.0, 6.0]
+    - [1.40, 14.0, 8.0]
+    - [1.25, 16.0, 6.0]
+    - [1.30, 16.0, 6.0]
+    - [1.35, 16.0, 6.0]
+  filter_damping_ratios: [0.8, 1.0, 1.2]
+  local_fraction: 0.15
+  integral_poles: [0.05, 0.10, 0.20]
+  extended_filter_inner_pairs:
+    - [14.0, 20.0]
+    - [14.0, 22.0]
+    - [16.0, 20.0]
+    - [16.0, 22.0]
+  extend_bandwidth_on_failure: true
+
+stress_profiles:
+  - name: small_fast
+    center: 0.35
+    amplitude: 0.05
+    period: 4.0
+  - name: large_fast
+    center: 0.35
+    amplitude: 0.20
+    period: 4.0
+  - name: large_slow
+    center: 0.35
+    amplitude: 0.20
+    period: 10.0
+  - name: nominal
+    center: 0.35
+    amplitude: 0.125
+    period: 7.0
+  - name: lower_edge_fast
+    center: 0.25
+    amplitude: 0.20
+    period: 4.0
+  - name: upper_edge_fast
+    center: 0.45
+    amplitude: 0.20
+    period: 4.0
+
+validation:
+  seeds: [666]
+  num_envs: 500
+  episodes_per_seed: 500
+
+acceptance:
+  minimum_episodes: 500
+  mean_mae: 0.015
+  mean_rmse: 0.020
+  p95_rmse: 0.030
+  p95_nrmse: 0.30
+  p95_maxe: 0.060
+  rmse_improvement: 0.50
+  stress_gain_min: 0.90
+  stress_gain_max: 1.10
+  stress_phase_error_deg: 10.0
+  stress_steady_nrmse: 0.20
+  full_saturation_rate: 0.05
+  steady_saturation_rate: 0.01
+  feedforward_rmse_improvement: 0.10
+  feedforward_phase_improvement_deg: 5.0

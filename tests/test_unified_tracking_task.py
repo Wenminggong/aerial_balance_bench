@@ -55,11 +55,21 @@ def test_mixed_sampling_honors_weights_and_is_seed_reproducible():
     assert torch.all(first.trajectory_type_id == TRAJECTORY_TYPE_TO_ID["triangle"])
     for name in ("trajectory_type_id", "center", "amplitude", "period", "phase", "initial_ball_position"):
         assert torch.equal(getattr(first, name), getattr(second, name))
-    assert first.get_config_info() == {
-        "trajectory_type_to_id": TRAJECTORY_TYPE_TO_ID,
-        "trajectory_types": ["constant", "sine", "triangle", "trapezoid"],
-        "normalized_trajectory_type_weights": [0.0, 0.0, 1.0, 0.0],
-    }
+    config_info = first.get_config_info()
+    assert config_info["trajectory_type_to_id"] == TRAJECTORY_TYPE_TO_ID
+    assert config_info["trajectory_types"] == ["constant", "sine", "triangle", "trapezoid"]
+    assert config_info["normalized_trajectory_type_weights"] == [0.0, 0.0, 1.0, 0.0]
+    assert config_info["random_b_spline"]["degree"] == 3
+    assert config_info["random_ramp_dwell"]["num_segments"] == 5
+
+
+def test_supplied_mixed_type_set_excludes_held_out_references():
+    task = make_task(4096)
+    task.sample_reset(FakeEnv(4096), torch.arange(4096))
+
+    sampled_ids = set(task.trajectory_type_id.tolist())
+    assert TRAJECTORY_TYPE_TO_ID["random_b_spline"] not in sampled_ids
+    assert TRAJECTORY_TYPE_TO_ID["random_ramp_dwell"] not in sampled_ids
 
 
 def test_constant_reference_and_independent_initial_position():
@@ -140,6 +150,35 @@ def test_reference_preview_shape_offsets_and_values():
         task.get_reference_preview(steps, future_steps=-1)
 
 
+@pytest.mark.parametrize(
+    ("trajectory_type", "duration_s"),
+    (("random_b_spline", 20.0), ("random_ramp_dwell", 20.0)),
+)
+def test_random_reference_preview_and_hold_after_duration(
+    trajectory_type: str,
+    duration_s: float,
+):
+    torch.manual_seed(5)
+    task = make_task(3, trajectory_types=(trajectory_type,))
+    task.sample_reset(FakeEnv(3), torch.arange(3))
+    steps = torch.tensor([0, 20, 200])
+
+    pg_preview, vg_preview = task.get_reference_preview(steps, future_steps=5)
+
+    assert pg_preview.shape == (3, 6)
+    assert vg_preview.shape == (3, 6)
+    for offset in range(6):
+        pg, vg = task.get_reference(steps + offset)
+        assert torch.allclose(pg_preview[:, offset], pg)
+        assert torch.allclose(vg_preview[:, offset], vg)
+    after_duration_step = int(duration_s / task.step_dt)
+    final_pg, final_vg = task.get_reference(torch.full((3,), after_duration_step))
+    later_pg, later_vg = task.get_reference(torch.full((3,), after_duration_step + 100))
+    assert torch.allclose(final_pg, later_pg)
+    assert torch.count_nonzero(final_vg) == 0
+    assert torch.count_nonzero(later_vg) == 0
+
+
 def test_partial_reset_preserves_other_environment_parameters():
     torch.manual_seed(7)
     task = make_task(6)
@@ -159,11 +198,26 @@ def test_partial_reset_preserves_other_environment_parameters():
             "previous_abs_error",
         )
     }
+    random_buffer_names = (
+        "b_spline_control_positions",
+        "ramp_start_positions",
+        "ramp_end_positions",
+        "ramp_start_times",
+        "ramp_end_times",
+        "dwell_end_times",
+        "ramp_dwell_final_position",
+    )
+    random_snapshots = {
+        name: getattr(task.random_references, name).clone()
+        for name in random_buffer_names
+    }
 
     task.sample_reset(env, reset_ids)
 
     for name, snapshot in snapshots.items():
         assert torch.equal(getattr(task, name)[untouched], snapshot[untouched])
+    for name, snapshot in random_snapshots.items():
+        assert torch.equal(getattr(task.random_references, name)[untouched], snapshot[untouched])
 
 
 @pytest.mark.parametrize(
@@ -188,6 +242,8 @@ def test_partial_reset_preserves_other_environment_parameters():
             },
             "infeasible",
         ),
+        ({"random_b_spline_degree": 6}, "smaller"),
+        ({"random_ramp_duration_range": (0.0, 1.0)}, "strictly positive"),
     ),
 )
 def test_invalid_configuration_fails_fast(overrides: dict[str, object], message: str):
@@ -232,4 +288,3 @@ def test_common_reward_uses_reference_velocity_progress_and_final_termination():
     assert torch.allclose(reward, expected)
     assert torch.equal(task.previous_abs_error, error.abs())
     assert torch.equal(task.compute_task_dones(state), torch.tensor([False, True]))
-

@@ -12,7 +12,7 @@ The benchmark provides:
 - Three high-level command interfaces: thrust, velocity, and position
 - A Gym-style Isaac Lab environment with unified observations, actions, rewards, and evaluation metrics
 - Robustness tests for mass variation, low-level gain variation, action delay, velocity-response dynamics, and external disturbance
-- Reference baselines for cascaded PID, nonlinear MPC, and model-free RL
+- Reference baselines for cascaded PID, nonlinear feedforward--feedback control, nonlinear MPC, and model-free RL
 
 ## Contents
 
@@ -46,10 +46,10 @@ The implementation is built on Isaac Lab and exposes a Gym-style interface for c
 | Task | Config value | Goal | Reset/reference design |
 | --- | --- | --- | --- |
 | Target-position balancing | `task_name: target_position` | Drive the ball to a fixed or sampled target position on the beam. | Initial ball position and target position are sampled from configurable ranges. |
-| Trajectory tracking | `task_name: trajectory_tracking` | Track a time-varying reference ball position. | The ball starts from a configurable center position; references can be sine, triangle, trapezoid, or random among these families. |
-| Unified reference tracking | `task_name: unified_tracking` | Train one policy on constant, sine, triangle, and trapezoid references. | Reference type and parameters are sampled per environment; a singleton type list provides controlled per-family evaluation. |
+| Trajectory tracking | `task_name: trajectory_tracking` | Track a time-varying reference ball position. | Supports sine, triangle, trapezoid, random B-spline, and random ramp-dwell references. The legacy `random` selector still samples only the original three periodic families. |
+| Unified reference tracking | `task_name: unified_tracking` | Train one policy on constant, sine, triangle, and trapezoid references and evaluate held-out families. | Reference type and parameters are sampled per environment; random B-spline and random ramp-dwell singleton configs test generalization without entering the supplied mixed-training distribution. |
 
-`unified_tracking` expresses target-position balancing as a constant trajectory while keeping reference generation independent from initial-state sampling. The supplied mixed config uses random constant goals with independent random ball positions and starts dynamic references on their sampled reference position. The original two task implementations and configs remain available and unchanged. See [Unified Reference Tracking](docs/unified_reference_tracking.md) for the complete sampling, reset, reward, preview, metric, and compatibility contracts.
+`unified_tracking` expresses target-position balancing as a constant trajectory while keeping reference generation independent from initial-state sampling. The supplied mixed config uses random constant goals with independent random ball positions and starts dynamic references on their sampled reference position. The two random held-out families must be selected explicitly and are not sampled by the existing mixed or legacy-random configurations. See [Unified Reference Tracking](docs/unified_reference_tracking.md) for the complete sampling, reset, reward, preview, metric, and compatibility contracts.
 
 The ball reference trajectories are visualized below. The constant reference corresponds to the target-position balancing task, while the sine, triangle, and trapezoidal references correspond to trajectory-tracking settings.
 
@@ -131,7 +131,7 @@ Trajectory tracking uses position and velocity tracking terms, control effort, a
 r = r_object + r_control + r_failure + r_progress
 ```
 
-Unified reference tracking applies one common position/velocity tracking reward to all four reference types, including `constant`. It deliberately does not add a constant-only goal bonus, so the policy is optimized against a single objective across the mixed distribution.
+Unified reference tracking applies one common position/velocity tracking reward to every supported reference type, including `constant` and both held-out random families. It deliberately does not add a constant-only goal bonus, so the policy is optimized against a single objective.
 
 For the exact reward parameters and the mapping between paper notation and code configuration fields, see the [reward design](docs/reward_design.md) document.
 
@@ -275,6 +275,57 @@ python3 scripts/nmpc_policy_eval.py \
   --headless
 ```
 
+NFFB on unified reference tracking:
+
+```bash
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine.yaml \
+  --episodes 10 \
+  --num_envs 10 \
+  --run_name nffb_unified_sine_smoke \
+  --headless
+```
+
+Use `scripts/run_nffb_policy_eval_configs.sh --headless` to evaluate constant,
+sine, triangle, trapezoid, random B-spline, and random ramp-dwell singleton
+configs in sequence. NFFB requires the velocity interface, a reference preview
+horizon of at least one step, and a delay-free environment. See
+[NFFB Controller](docs/nffb_controller.md) for the model, configuration,
+diagnostics, and tuning workflow.
+
+For the automated phase-zero sine search (`max_acc=5.0 m/s^2`), run:
+
+```bash
+conda run -n isaac-sim python scripts/tune_nffb_sine.py --stage all
+```
+
+The search is resumable and writes a candidate leaderboard, per-episode
+tracking/frequency metrics, deterministic stress tests, feedforward ablation,
+and a 500-episode acceptance report. Its search space and thresholds are in
+`baselines/configs/nffb_sine_tuning.yaml`.
+
+The phase-zero sine-specific policy selected by this workflow is
+`baselines/configs/nffb_sine_phase0_acc5.yaml`. Evaluate it without changing
+the generic NFFB defaults:
+
+```bash
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine.yaml \
+  --policy_config baselines/configs/nffb_sine_phase0_acc5.yaml \
+  --episodes 100 \
+  --num_envs 10 \
+  --run_name nffb_sine_phase0_acc5_eval \
+  --headless
+```
+
+In the fixed `seed=666`, 500-environment validation, this policy achieved
+mean MAE/RMSE of `0.00602/0.00998 m`, versus `0.05259/0.06236 m` for the
+generic defaults, with no terminations or beam-edge margin violations.
+Detailed stress and acceptance results are recorded in
+[NFFB Controller](docs/nffb_controller.md#phase-zero-sine-result).
+
 RL evaluation requires a trained checkpoint:
 
 ```bash
@@ -299,7 +350,11 @@ python3 scripts/rl_policy_eval.py \
   --headless
 ```
 
-Use `unified_tracking_constant.yaml`, `unified_tracking_triangle.yaml`, or `unified_tracking_trapezoid.yaml` for the other families. CPID and NMPC are not wired to `unified_tracking`; their existing task paths are unchanged.
+Use another `unified_tracking_<type>.yaml` singleton config for the other
+families. In particular, `unified_tracking_random_b_spline.yaml` and
+`unified_tracking_random_ramp_dwell.yaml` evaluate generalization beyond the
+four-family training distribution. CPID and NMPC retain their existing task
+paths.
 
 ### Train an RL policy using RPO
 
@@ -353,7 +408,9 @@ Template configs:
 - `environments/configs/trajectory_tracking.yaml`
 - `environments/configs/template_eval_velocity_response_realistic.yaml`
 - `environments/configs/unified_tracking_mixed.yaml`
-- `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid}.yaml`
+- `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid,random_b_spline,random_ramp_dwell}.yaml`
+- `baselines/configs/nffb.yaml`
+- `baselines/configs/nffb_unified_tracking_eval.yaml`
 
 
 ### Implement a custom policy
@@ -395,11 +452,16 @@ To compensate for action delay, the repository includes a model-based state pred
 
 The current predictor compensates only the configured integer action delay. Enabling the velocity-response model does not make the predictor response-aware; such runs therefore evaluate delay compensation under an additional unmodeled command-response dynamic.
 
+NFFB is currently a delay-free unified-tracking baseline and intentionally does
+not instantiate this predictor. A future delay-compensated variant will use the
+same nonlinear model with execution-time state and reference prediction.
+
 ### Baselines
 
 | Baseline | Main files | Idea |
 | --- | --- | --- |
 | Cascaded PID | `baselines/cpid_policy.py`, `baselines/configs/cpid.yaml` | Outer-loop incremental PID generates a beam-angle reference from ball-position error; inner-loop incremental PID generates a vertical-velocity increment. |
+| NFFB | `baselines/nffb_policy.py`, `baselines/configs/nffb.yaml` | Combines discrete reference-acceleration feedforward and ball-tracking feedback, inverts the nonlinear ball dynamics, filters the beam-angle command, and applies exact rope--beam geometric inversion. |
 | NMPC | `baselines/nmpc_policy.py`, `baselines/nmpc_core.py`, `baselines/configs/nmpc.yaml` | Solves a nonlinear optimal control problem over velocity-interface dynamics using do-mpc/CasADi. |
 | RL/RPO | `baselines/rl_policy.py`, `baselines/rl_models.py`, `baselines/configs/rl_rpo.yaml` | Uses skrl RPO/PPO-compatible MLP actor-critic models; the default policy uses an 8-D adapted observation. |
 
