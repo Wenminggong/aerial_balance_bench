@@ -1,14 +1,16 @@
 # Nonlinear Feedforward--Feedback Controller
 
-This document describes the delay-free nonlinear feedforward--feedback
-controller (NFFB) for `task_name: unified_tracking` and
+This document describes the nonlinear feedforward--feedback controller (NFFB)
+for `task_name: unified_tracking` and
 `interface_name: velocity`. The implementation is vectorized over Isaac Lab
 environments and returns the physical incremental velocity action expected by
 `VelocityInterface`.
 
-NFFB is the first stage of the planned delay-compensated NFFB controller. It
-does not predict future plant state, command delay, or the optional FOPDT
-velocity response.
+NFFB keeps its original delay-free path and optionally uses the shared
+velocity-model state predictor for command-delay compensation. The predictor
+can include the deterministic nominal first-order velocity response. NFFB also
+provides a separately switchable exact inverse of that response between its
+desired output velocity and the command sent to `VelocityInterface`.
 
 ## Supported contract
 
@@ -17,8 +19,9 @@ NFFB requires:
 - `task_name: unified_tracking`;
 - `interface_name: velocity`;
 - `reference_preview.enabled: true`;
-- `reference_preview.future_steps >= 1`;
-- no active command-level action delay.
+- in delay-free mode, `reference_preview.future_steps >= 1`;
+- with an action delay of `D > 0`, an active predictor with the same
+  `delay_step` and `reference_preview.future_steps >= D + 1`.
 
 The controller leaves the legacy observation prefix unchanged:
 
@@ -26,8 +29,10 @@ The controller leaves the legacy observation prefix unchanged:
 [pb, vb, ab, theta, omega, alpha, drz, vrz, arz, pg, a_prev]
 ```
 
-It additionally consumes `vg_0` and `vg_1` from the existing reference
-preview. No task, reward, evaluator, or reference waveform is modified.
+The delay-free path additionally consumes `vg_0` and `vg_1`. The delayed path
+uses `pg_0 ... pg_D` for plant prediction, then consumes `vg_D` and
+`vg_{D+1}` for NFFB. No task, reward, evaluator, or reference waveform is
+modified.
 
 ## Model and coordinate convention
 
@@ -85,6 +90,19 @@ p_ref = pg_0
 v_ref = vg_0
 a_ref_raw = (vg_1 - vg_0) / Ts.
 ```
+
+With an active `D`-step state predictor, the same update is shifted to the
+command execution time:
+
+```text
+p_ref = pg_D
+v_ref = vg_D
+a_ref_raw = (vg_{D+1} - vg_D) / Ts.
+```
+
+The plant state is first predicted through the pending delayed-command queue.
+The NFFB integral, command filter, and anti-windup state then execute one normal
+update using that predicted state; they are not replayed `D` times.
 
 This gives zero derivatives for constant references and remains consistent
 with the reference velocity used by the unified reward and evaluator.
@@ -176,15 +194,7 @@ The policy maintains its own absolute `velocity_command`, initialized to zero
 at environment reset. In a delay-free run it mirrors
 `VelocityInterface.command_velocity[:, 2]`.
 
-Each step applies the following saturation order:
-
-1. clip the reference acceleration feedforward;
-2. clip desired ball acceleration to the feasible beam-angle interval;
-3. limit filtered beam angle and angular rate;
-4. optionally clip absolute vertical velocity;
-5. clip the velocity increment to `max_acc * Ts`.
-
-The returned action is
+Without response compensation, the returned action remains:
 
 ```text
 delta_vrz = clip(
@@ -194,11 +204,63 @@ delta_vrz = clip(
 ).
 ```
 
+This is the original NFFB path and remains the default.
+
+### Optional first-order response inverse
+
+Set `velocity_response_compensation.enabled: true` to interpret the nonlinear
+inversion result as a desired response output rather than a direct interface
+input. For the deterministic nominal response
+
+```text
+r_k = a * r_{k-1} + (1 - a) * (K * u_k + b)
+a = exp(-Ts / tau),
+```
+
+NFFB calculates the unconstrained input
+
+```text
+u_raw = (((v_desired - a * r_pre) / (1 - a)) - b) / K.
+```
+
+For `tau = 0`, the static inverse is
+`u_raw = (v_desired - b) / K`. Near-zero one-step response fractions are
+rejected because their inverse is numerically ill-conditioned.
+
+The compensator owns a nominal response state separate from the plant state
+predictor. At `D=0`, `r_pre` is the current compensator state. With an active
+`D`-step predictor, the compensator first advances that state through the
+ordered pending-command queue, producing the response state immediately before
+the new command executes. After generating the action, its persistent state is
+advanced by only the command that executes in the current environment step.
+Thus predictor lookahead does not replay the persistent response state `D`
+times.
+
+`parameter_source: state_predictor` copies
+`velocity_response_tau_s/gain/bias/max_abs_velocity` from the resolved
+predictor configuration. This works even when delay prediction is inactive.
+`parameter_source: explicit` instead uses `tau_s/gain/bias/max_abs_velocity`
+from the compensation section. Explicit `auto` values resolve only from fixed
+robustness ranges; randomized ranges require a nominal value. If an active
+response-aware predictor and an explicit inverse describe the same response,
+their parameters must agree.
+
+Each step applies the following saturation order:
+
+1. clip the reference acceleration feedforward;
+2. clip desired ball acceleration to the feasible beam-angle interval;
+3. limit filtered beam angle and angular rate;
+4. optionally clip the desired response output with
+   `velocity_response_compensation.max_abs_velocity`;
+5. apply the exact response inverse;
+6. project its input onto the absolute command bound and the one-step reachable
+   interval defined by `max_acc * Ts`.
+
 `constraints.max_acc` and `constraints.max_velocity` are resolved from the
-environment. The benchmark convention `max_velocity: 0` disables the absolute
-velocity limit. The runner rejects a policy `max_acc` that differs from the
-environment value, preventing silent double-clipping with inconsistent
-bounds.
+environment and constrain the input command, not the desired response output.
+The benchmark convention `max_velocity: 0` disables the absolute input limit.
+The runner rejects a policy `max_acc` that differs from the environment value,
+preventing silent double-clipping with inconsistent bounds.
 
 ## Integral anti-windup
 
@@ -208,8 +270,8 @@ conditional integration freezes the integral when:
 - the desired ball acceleration is saturated and the position error would
   push it farther into saturation;
 - the command-filter angle or angular rate is saturated;
-- the absolute velocity is saturated; or
-- the per-step acceleration limit is saturated.
+- the response output or inverse input velocity is saturated; or
+- the inverse input reaches the per-step acceleration limit.
 
 Otherwise,
 
@@ -237,6 +299,8 @@ The supplied `baselines/configs/nffb.yaml` starts with:
 | Commanded beam-rate limit | `0.5 rad/s` |
 | Drone maximum acceleration | `auto` (`0.5 m/s^2` in supplied env configs) |
 | Drone maximum velocity | `auto` (`0`, disabled, in supplied env configs) |
+| Velocity-response inverse | disabled |
+| Response parameter source | `state_predictor` |
 
 Tune in this order:
 
@@ -353,12 +417,12 @@ python scripts/tune_nffb_sine.py \
 
 ## Evaluation
 
-Run a short sine smoke test:
+Run a short delay-free smoke test:
 
 ```bash
 python3 scripts/nffb_policy_eval.py \
   --config baselines/configs/nffb_unified_tracking_eval.yaml \
-  --env_config environments/configs/unified_tracking_sine.yaml \
+  --env_config environments/configs/unified_tracking_mixed.yaml \
   --policy_config baselines/configs/nffb_sine_phase0_acc5.yaml \
   --episodes 4 \
   --num_envs 4 \
@@ -366,12 +430,40 @@ python3 scripts/nffb_policy_eval.py \
   --headless
 ```
 
-Run all singleton families:
+Run the predictor-aware `D=8` example:
 
 ```bash
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_predictor_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine.yaml \
+  --episodes 2 \
+  --num_envs 2 \
+  --headless
+```
+
+Run deterministic response-compensation checks without and with delay:
+
+```bash
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_response_compensation_eval.yaml \
+  --episodes 2 --num_envs 2 --headless
+
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_predictor_response_compensation_eval.yaml \
+  --episodes 2 --num_envs 2 --headless
+```
+
+Run the current delayed deterministic singleton families:
+
+```bash
+RUN_CONFIG=baselines/configs/nffb_unified_tracking_predictor_eval.yaml \
+REFERENCE_TYPES="constant sine triangle trapezoid" \
 TARGET_EPISODES=1000 NUM_ENVS=10 \
   scripts/run_nffb_policy_eval_configs.sh --headless
 ```
+
+The predictor-disabled run config must be paired with delay-free environment
+configs.
 
 Each run saves the standard unified metrics, rollout observations/actions,
 environment command states, and all `policy_*` controller diagnostics.
@@ -388,16 +480,21 @@ The rollout includes:
 - `theta_star`, filtered `theta_d/omega_d`, and filter acceleration;
 - beam-angle error, angular-rate command, rope angle;
 - raw/limited/accumulated velocity command and returned action;
+- predicted 11-D plant state, predictor reference horizon, and command-sync
+  error;
+- compensator nominal/execution states, desired response output, raw/limited
+  inverse input, reconstructed output, tracking error, parameter source, and
+  saturation flags;
 - reference, ball-acceleration, filter-angle, filter-rate, velocity,
   acceleration, and anti-windup saturation flags.
 
-## Current limitations and DC-NFFB extension
+## Predictor limitations
 
-NFFB v1 deliberately fails fast when command delay is active. It also does not
-predict the optional FOPDT velocity-response model. The future DC-NFFB stage
-will:
-
-1. predict plant state through the pending command-delay queue;
-2. select `pg_d`, `vg_d`, and `ag_d` at the command execution step;
-3. feed the aligned future state/reference into the same outer inversion,
-   filter, inner loop, and constraint pipeline.
+The delayed prediction and inverse compensate the deterministic nominal model
+only. They do not replay or invert Gaussian/OU response noise, mirror
+reset-time per-environment randomized response parameters, model the low-level
+SE(3) velocity loop, or advance the NFFB internal filter `D` times. Random
+`tau/gain/bias` ranges therefore require explicit nominal predictor and
+compensation values. Existing delay-free tuning results describe the original
+delay-free plant and must not be interpreted as performance validation for the
+delayed, response-aware configuration.

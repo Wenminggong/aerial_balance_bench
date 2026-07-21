@@ -8,7 +8,7 @@ env:
   device: cuda:0
 
 unified_tracking_task:
-  trajectory_types: [sine]
+  trajectory_types: [constant]
   trajectory_type_weights: [1.0]
   constant_goal_range: [0.10, 0.60]
   dynamic_center_range: [0.3, 0.4]
@@ -36,8 +36,10 @@ velocity_interface:
   max_acc: 5.0
   max_velocity: 0.0
 
+# Fixed deterministic delay and response for testing predictor plus inverse
+# compensation without randomized parameters or additive noise.
 robustness:
-  enabled: false
+  enabled: true
   ball_mass_variation_enabled: false
   ball_mass_range: [0.0005, 0.0005]
   recompute_ball_inertia: true
@@ -46,14 +48,14 @@ robustness:
   action_delay_enabled: true
   delay_step: 8
   velocity_response_enabled: true
-  velocity_response_tau_s_range: [0.150, 0.160]
-  velocity_response_gain_range: [0.84, 0.88]
-  velocity_response_bias_range: [-0.004, -0.003]
-  velocity_response_noise_mode: ou
-  velocity_response_noise_std_range: [0.02, 0.05]
-  velocity_response_ou_theta_range: [4.0, 10.0]
+  velocity_response_tau_s_range: [0.155, 0.155]
+  velocity_response_gain_range: [0.86, 0.86]
+  velocity_response_bias_range: [-0.0035, -0.0035]
+  velocity_response_noise_mode: none
+  velocity_response_noise_std_range: [0.0, 0.0]
+  velocity_response_ou_theta_range: [0.0, 0.0]
   velocity_response_ou_mu_range: [0.0, 0.0]
-  velocity_response_noise_clip: 0.1
+  velocity_response_noise_clip: 0.0
   velocity_response_max_abs_velocity: 0.0
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0
@@ -62,16 +64,16 @@ robustness:
   external_disturbance_ou_clip: 0.05
 
 unified_tracking_evaluator:
-  num_eval_episodes: 1000
+  num_eval_episodes: 10
   target_zone: 0.01
   steady_state_window_s: 1.0
 
 runner:
-  target_episodes: 1000
+  target_episodes: 10
   max_steps: null
   render: false
   save_rollout: true
 
 logging:
   root_dir: logs/zero_action/unified_tracking
-  run_name: zero_action_unified_tracking_sine
+  run_name: zero_action_unified_tracking_constant_response_d8

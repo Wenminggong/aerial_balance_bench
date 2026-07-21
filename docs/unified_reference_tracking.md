@@ -200,7 +200,12 @@ The adapter obtains the raw dimension and field names from the environment; the 
 
 Preview horizon is part of the checkpoint input contract. Training and evaluation must use the same `H` and field order. A mismatched raw spec/dimension produces an explicit error instead of silently loading an incompatible network. All supplied mixed and singleton configs use `H = 5`.
 
-`reference_preview` policy mode cannot be combined with an active velocity-model state predictor (`enabled: true` with `delay_step > 0`). The current predictor assumes the legacy state layout and does not propagate a moving reference over its delay horizon; this unsupported combination fails fast. Predictor-disabled preview is the supported configuration in this release.
+`reference_preview` policy mode cannot be combined with an active
+velocity-model state predictor (`enabled: true` with `delay_step > 0`). The
+predictor now advances the plant state and reference position for
+`legacy8`/`full11`, but it does not rebase the complete position/velocity preview
+consumed by a preview network. This unsupported combination therefore still
+fails fast.
 
 ### Autoreset timing
 
@@ -248,10 +253,64 @@ initial_ball_position
 | `baselines/configs/rl_rpo_reference_preview_eval.yaml` | Deterministic preview-policy evaluation template. |
 | `baselines/configs/rl_unified_tracking_rpo_train.yaml` | Complete mixed RPO training run. |
 | `baselines/configs/rl_unified_tracking_rpo_eval.yaml` | Complete RL evaluation run; switch singleton env with `--env_config`. |
+| `baselines/configs/cpid_unified_tracking_eval.yaml` | Unchanged CPID evaluation on the mixed task; switch singleton env with `--env_config`. |
+| `baselines/configs/cpid_unified_tracking_predictor_eval.yaml` | CPID with an eight-step response-aware predictor and aligned reference preview. |
 | `baselines/configs/nffb_unified_tracking_eval.yaml` | Delay-free NFFB evaluation run; switch singleton env with `--env_config`. |
+| `baselines/configs/nffb_unified_tracking_predictor_eval.yaml` | NFFB with an eight-step response-aware predictor and `D+1` velocity preview. |
 | `baselines/configs/nffb_sine_tuning.yaml` | Resumable phase-zero sine bandwidth search, stress tests, ablation, and validation. |
 
-The mixed and singleton configs share the same dynamic-parameter ranges and `H = 5` layout. They differ only in eligible reference types, evaluation scale, and log names.
+The mixed config retains its delay-free `H=5` layout. The deterministic
+constant/sine/triangle/trapezoid singleton configs currently use `H=10`,
+`D=8`, and the velocity-response robustness model; the dedicated CPID
+triangle predictor example keeps `H=D=8`.
+
+The CPID unified runner preserves the legacy 11-D controller input. When its
+state predictor is inactive, CPID reacts to the current `pg` exactly as before.
+When the predictor is active, the runner additionally supplies the named
+position sequence `pg_0 ... pg_D` to the predictor. After predicting plant state
+step \(j\), the tracking error is evaluated against `pg_j`, and the final
+predicted observation contains `pg_D`. The reference velocities `vg_j` are not
+used by the current model.
+
+An active predictor on a moving-reference task requires
+`reference_preview.enabled: true` and `reference_preview.future_steps >=
+delay_step`. A shorter preview is rejected at startup; it is never extrapolated
+or padded. Existing unified configs retain `H=5` for RL checkpoint
+compatibility. The dedicated
+`environments/configs/unified_tracking_triangle_predictor.yaml` example uses
+`H=D=8`.
+
+RL evaluation uses the same future-position path in `legacy8` and `full11`
+observation modes. Combining an active predictor with
+`observation_mode=reference_preview` remains unsupported: after advancing the
+plant state to \(k+D\), that network's entire preview would also need to advance
+and therefore requires references through \(k+D+H\).
+
+The predictor API is task-independent, so the environment preview generated
+through either `TrajectoryTrackingTask.get_reference()` or
+`UnifiedTrackingTask.get_reference_preview()` has the same `pg_0 ... pg_D`
+contract. This change does not add legacy trajectory-tracking runners or NMPC
+moving-task integration.
+
+NFFB adds one extra reference requirement because its feedforward acceleration
+uses a forward difference. With a delay of `D` steps it consumes the predicted
+11-D plant state and `pg_D`, `vg_D`, `vg_{D+1}`, so the preview must satisfy
+`H >= D + 1`. The delay-free path remains `D=0` and uses the original
+`pg_0`, `vg_0`, and `vg_1` values. The state predictor, NFFB command filter,
+integrator, and anti-windup state are not repeatedly advanced through the
+delay horizon: the predictor alone rolls the plant forward, while the
+controller states update once per actual policy cycle.
+
+The NFFB runner resolves predictor geometry, mass, gravity, step time, command
+limits, and delay from the environment and checks them against the resolved
+NFFB model. Random velocity-response ranges cannot be collapsed silently:
+the predictor-aware example supplies explicit nominal `tau/gain/bias` values.
+Gaussian/OU noise and reset-time per-environment parameter samples remain
+outside the predictor.
+
+Mixed runs provide aggregate transfer and type-coverage evidence. Controller
+comparisons should use the constant and dynamic singleton configs so that every
+summary has a controlled reference family and episode count.
 
 The NFFB tuning config deliberately specializes the sine singleton to
 `phase=0`, `max_acc=5.0 m/s^2`, and `max_velocity=0`. It does not change the
@@ -325,9 +384,9 @@ Use a new logging root/run name when changing metric schemas or experimental dis
 | Zero-action runner | Supported | Supported | Supported |
 | RL train/eval | Supported as before | Supported with velocity interface | `reference_preview`, `legacy8`, and `full11` adapters supported |
 | Existing RL checkpoints | Unchanged with their original mode/config | Not automatically transferable | Preview checkpoint requires matching `H` |
-| CPID runner/policy | Supported for its existing task paths | Not supported | Not modified |
+| CPID runner/policy | Supported for its existing task paths | Supported by the dedicated unified runner | Future positions consumed only by an active predictor |
 | NMPC runner/policy | Supported for its existing task paths | Not supported | Not modified |
-| NFFB runner/policy | Not exposed on legacy tasks | Supported with velocity interface | Requires at least `H = 1`; delay-free only |
-| Velocity state predictor | Existing legacy combinations unchanged | Legacy-layout behavior only | Not supported with `reference_preview` mode |
+| NFFB runner/policy | Not exposed on legacy tasks | Supported with velocity interface | Delay-free requires `H >= 1`; delayed prediction requires `H >= D + 1` |
+| Velocity state predictor | Existing combinations unchanged; task-independent future-reference API available | `pg_0 ... pg_D` supported in CPID, NFFB, and RL legacy modes | NFFB additionally consumes `vg_D` and `vg_{D+1}`; full RL `reference_preview` mode remains unsupported |
 
 No existing environment YAML is migrated. `target_position`, `trajectory_tracking`, the 11-D default observation, legacy evaluator keys, and legacy checkpoint input dimensions remain intact.

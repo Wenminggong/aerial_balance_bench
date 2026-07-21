@@ -2,7 +2,12 @@
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
 from .cpid_policy import AnglePIDCfg, CPIDPolicy, CPIDPolicyCfg, VelocityPIDCfg
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import (
+    VelocityModelStatePredictor,
+    VelocityModelStatePredictorCfg,
+    extract_reference_positions,
+    validate_reference_preview_horizon,
+)
 from .nffb_policy import (
     NFFBCommandFilterCfg,
     NFFBConstraintsCfg,
@@ -18,6 +23,10 @@ from .rl_models import MLPNetworkCfg
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
 from .rl_policy import RLPolicy, RLPolicyCfg
 from .velocity_interface_model import VelocityInterfaceModel, VelocityInterfaceModelCfg
+from .velocity_response_compensator import (
+    FirstOrderVelocityResponseCompensator,
+    NFFBVelocityResponseCompensationCfg,
+)
 
 __all__ = [
     "AnglePIDCfg",
@@ -33,6 +42,7 @@ __all__ = [
     "NFFBOuterLoopCfg",
     "NFFBPolicy",
     "NFFBPolicyCfg",
+    "NFFBVelocityResponseCompensationCfg",
     "NMPCPolicy",
     "NMPCPolicyCfg",
     "ObservationIndex",
@@ -45,5 +55,8 @@ __all__ = [
     "VelocityModelStatePredictorCfg",
     "VelocityInterfaceModel",
     "VelocityInterfaceModelCfg",
+    "FirstOrderVelocityResponseCompensator",
+    "extract_reference_positions",
     "validate_nffb_environment_contract",
+    "validate_reference_preview_horizon",
 ]

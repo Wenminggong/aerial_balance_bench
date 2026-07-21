@@ -1,0 +1,36 @@
+env_config: environments/configs/unified_tracking_constant.yaml
+policy_config: baselines/configs/nffb_sine_phase0_acc5.yaml
+
+# The singleton environment currently uses D=8 and H=10. NFFB needs H>=D+1
+# because its acceleration feedforward consumes vg_D and vg_{D+1}.
+policy_overrides:
+  state_predictor:
+    enabled: true
+    delay_step: 8
+    solver: rk4
+    step_dt: auto
+    max_acc: auto
+    max_velocity: auto
+    velocity_response_enabled: true
+    velocity_response_tau_s: 0.155
+    velocity_response_gain: 0.86
+    velocity_response_bias: -0.0035
+    velocity_response_max_abs_velocity: auto
+    plank_length: auto
+    rope_length: auto
+    ball_position_offset: auto
+    gravity: auto
+    ball_mass: auto
+    ball_radius: auto
+    ball_inertia_ratio: auto
+    epsilon: auto
+
+runner:
+  target_episodes: 10
+  max_steps: null
+  render: false
+  save_rollout: true
+
+logging:
+  root_dir: logs/nffb/unified_tracking
+  run_name: nffb_unified_predictor

@@ -10,7 +10,7 @@ velocity_pid:
   kp: 10.0
   ti: 1000.0
   td: 0.0
-  max_acc: 0.5
+  max_acc: 5.0
 
 state_predictor:
   enabled: false

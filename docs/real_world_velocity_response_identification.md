@@ -212,8 +212,21 @@ OU 参数均以 `[min, max]` 配置，并在每个环境的 episode reset 时独
 
 这里模拟的是低层速度控制器之前的命令响应，而不是直接覆盖仿真物理速度。实际 `vrz` 还包含现有
 SE(3) 速度控制器和飞行器动力学，因此启用后应同时检查原始命令、延时命令、名义响应、最终执行命令
-和实际 `vrz`，避免把真实整机辨识的时间常数与仿真本身的闭环惯性重复计算。现有 state predictor
-仍只补偿固定步数延时，不补偿该一阶响应。
+和实际 `vrz`，避免把真实整机辨识的时间常数与仿真本身的闭环惯性重复计算。
+
+`baselines/model_state_predictor.py` 可通过
+`state_predictor.velocity_response_enabled` 在延时队列之后启用相同的确定性指数离散一阶响应，再将
+响应速度用于梁、球和无人机状态的前向积分。CPID、NMPC、RL 和 NFFB evaluation runner 支持将预测器的
+`tau/gain/bias/max_abs_velocity` 设置为 `auto`；只有环境中的参数区间上下限相等时才会自动复制，
+随机区间必须显式提供预测器标称值。预测器不重放 Gaussian/OU 噪声，也不接收每个环境在 reset 时
+采样的真实响应参数。`baselines/configs/cpid_predictor_velocity_response.yaml` 给出了与固定参数环境
+配置配套使用的示例。
+
+NFFB 还可以独立启用 `velocity_response_compensation`，对上述确定性名义响应执行精确离散逆。
+`parameter_source: state_predictor` 会复用预测器已经解析的参数；即使 `D=0`、预测器未激活，该参数
+来源仍然有效。延时模式会先用预测器的待执行命令队列把补偿器自身的名义响应状态推进到新命令生效
+之前，再求解受 `max_acc` 和 `max_velocity` 约束的输入。该补偿不对 Gaussian/OU 噪声、逐环境随机
+参数或 SE(3) 低层动力学求逆，因此必须把固定无噪声验证和随机鲁棒性评估分开解释。
 
 ## 数据处理与模型拟合方法
 

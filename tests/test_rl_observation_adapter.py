@@ -6,6 +6,7 @@ import pytest
 import torch
 from gymnasium import Env, spaces
 
+from baselines.base_policy import ObservationIndex
 from baselines.model_state_predictor import VelocityModelStatePredictorCfg
 from baselines.rl_env_wrapper import NormalizedRLTrainingWrapper
 from baselines.rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
@@ -238,3 +239,97 @@ def test_policy_rejects_reference_preview_with_active_predictor_before_model_bui
             physical_action_limit=0.01,
             raw_observation_dim=12,
         )
+
+
+@pytest.mark.parametrize("mode", ["legacy8", "full11"])
+def test_policy_legacy_modes_pass_future_reference_to_active_predictor(
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    raw_fields = (
+        *RLObservationAdapter.FULL11_FIELDS,
+        "vg_0",
+        "pg_1",
+        "vg_1",
+        "pg_2",
+        "vg_2",
+    )
+    cfg = RLPolicyCfg(
+        observation_mode=mode,
+        load_checkpoint=False,
+        state_predictor=VelocityModelStatePredictorCfg(
+            enabled=True,
+            delay_step=2,
+            solver="euler",
+            step_dt=0.1,
+            max_acc=1.0,
+        ),
+    )
+    policy = RLPolicy(
+        cfg,
+        num_envs=2,
+        device="cpu",
+        step_dt=0.1,
+        physical_action_limit=0.1,
+        raw_observation_fields=raw_fields,
+    )
+    monkeypatch.setattr(
+        policy.agent,
+        "act",
+        lambda states, timestep, timesteps: torch.zeros((2, 1), device=states.device),
+    )
+    observation = torch.zeros((2, len(raw_fields)))
+    observation[:, ObservationIndex.PB] = 0.35
+    observation[:, ObservationIndex.PG] = 0.35
+    observation[:, raw_fields.index("pg_1")] = torch.tensor([0.40, 0.30])
+    observation[:, raw_fields.index("pg_2")] = torch.tensor([0.50, 0.20])
+
+    with torch.no_grad():
+        policy.act({"policy": observation})
+    state = policy.get_state()
+
+    torch.testing.assert_close(state["policy_predicted_pg"], torch.tensor([0.50, 0.20]))
+    torch.testing.assert_close(
+        state["policy_predictor_reference_preview_used"],
+        torch.ones(2),
+    )
+
+
+def test_policy_full11_active_predictor_holds_goal_without_preview(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cfg = RLPolicyCfg(
+        observation_mode="full11",
+        load_checkpoint=False,
+        state_predictor=VelocityModelStatePredictorCfg(
+            enabled=True,
+            delay_step=1,
+            solver="euler",
+            step_dt=0.1,
+            max_acc=1.0,
+        ),
+    )
+    policy = RLPolicy(
+        cfg,
+        num_envs=2,
+        device="cpu",
+        step_dt=0.1,
+        physical_action_limit=0.1,
+    )
+    monkeypatch.setattr(
+        policy.agent,
+        "act",
+        lambda states, timestep, timesteps: torch.zeros((2, 1), device=states.device),
+    )
+    observation = torch.zeros((2, 11))
+    observation[:, ObservationIndex.PG] = torch.tensor([0.2, 0.4])
+
+    with torch.no_grad():
+        policy.act({"policy": observation})
+    state = policy.get_state()
+
+    torch.testing.assert_close(state["policy_predicted_pg"], torch.tensor([0.2, 0.4]))
+    torch.testing.assert_close(
+        state["policy_predictor_reference_preview_used"],
+        torch.zeros(2),
+    )

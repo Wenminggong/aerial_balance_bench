@@ -192,6 +192,11 @@ POLICY_EXTRA_FIELDS = (
     "policy_predicted_pg",
     "policy_predicted_a_prev",
     "policy_predictor_command_z",
+    "policy_predictor_velocity_response_enabled",
+    "policy_predictor_velocity_response_tau_s",
+    "policy_predictor_velocity_response_gain",
+    "policy_predictor_velocity_response_bias",
+    "policy_predictor_velocity_response_max_abs_velocity",
     "policy_predictor_error",
     "policy_predictor_error_dot",
     "policy_predictor_error_ddot",
@@ -292,6 +297,7 @@ def _resolve_predictor_cfg_from_env(policy_cfg: CPIDPolicyCfg, env_cfg: AerialBa
         predictor_cfg.ball_radius = float(env_cfg.ball_cfg.spawn.radius)
     if _is_auto(predictor_cfg.ball_mass):
         predictor_cfg.ball_mass = float(env_cfg.ball_cfg.spawn.mass_props.mass)
+    predictor_cfg.resolve_velocity_response_from_robustness(env_cfg.robustness)
 
 
 def _is_auto(value) -> bool:
@@ -425,6 +431,21 @@ def main():
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,
                 "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
                 "state_predictor_solver": policy_cfg.state_predictor.solver,
+                "state_predictor_velocity_response_enabled": (
+                    policy_cfg.state_predictor.velocity_response_enabled
+                ),
+                "state_predictor_velocity_response_tau_s": (
+                    policy_cfg.state_predictor.velocity_response_tau_s
+                ),
+                "state_predictor_velocity_response_gain": (
+                    policy_cfg.state_predictor.velocity_response_gain
+                ),
+                "state_predictor_velocity_response_bias": (
+                    policy_cfg.state_predictor.velocity_response_bias
+                ),
+                "state_predictor_velocity_response_max_abs_velocity": (
+                    policy_cfg.state_predictor.velocity_response_max_abs_velocity
+                ),
                 "observation_fields": OBSERVATION_FIELDS,
             },
             output_dir / "resolved_run.yaml",

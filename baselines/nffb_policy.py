@@ -9,7 +9,16 @@ from dataclasses import asdict, dataclass, field
 import torch
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
+from .model_state_predictor import (
+    VelocityModelStatePredictor,
+    VelocityModelStatePredictorCfg,
+    extract_reference_positions,
+)
 from .velocity_interface_model import VelocityInterfaceModel, VelocityInterfaceModelCfg
+from .velocity_response_compensator import (
+    FirstOrderVelocityResponseCompensator,
+    NFFBVelocityResponseCompensationCfg,
+)
 
 
 LEGACY_OBSERVATION_FIELDS = (
@@ -36,17 +45,39 @@ def validate_nffb_environment_contract(
     robustness_enabled: bool,
     action_delay_enabled: bool,
     delay_step: int,
+    state_predictor_enabled: bool = False,
+    state_predictor_delay_step: int = 0,
 ):
-    """Validate the environment features supported by delay-free NFFB."""
+    """Validate the environment and predictor features supported by NFFB."""
     if task_name != "unified_tracking":
         raise ValueError("NFFB supports only task_name='unified_tracking'.")
     if interface_name != "velocity":
         raise ValueError("NFFB supports only interface_name='velocity'.")
-    if not reference_preview_enabled or int(reference_preview_future_steps) < 1:
-        raise ValueError("NFFB requires reference_preview.enabled=true and future_steps >= 1.")
     delay_active = robustness_enabled and action_delay_enabled and int(delay_step) > 0
-    if delay_active:
-        raise ValueError("NFFB v1 does not support action delay; use a delay-free environment config.")
+    predictor_active = state_predictor_enabled and int(state_predictor_delay_step) > 0
+    if delay_active and not predictor_active:
+        raise ValueError(
+            "NFFB action delay requires an active state predictor with a matching delay_step."
+        )
+    if predictor_active and not delay_active:
+        raise ValueError(
+            "NFFB state predictor must not be active when the environment action delay is inactive."
+        )
+    if delay_active and int(state_predictor_delay_step) != int(delay_step):
+        raise ValueError(
+            "NFFB state predictor delay_step must match robustness.delay_step; "
+            f"got {state_predictor_delay_step} != {delay_step}."
+        )
+
+    required_future_steps = int(delay_step) + 1 if delay_active else 1
+    if (
+        not reference_preview_enabled
+        or int(reference_preview_future_steps) < required_future_steps
+    ):
+        raise ValueError(
+            "NFFB requires reference_preview.enabled=true and "
+            f"future_steps >= {required_future_steps}."
+        )
 
 
 @dataclass
@@ -110,6 +141,12 @@ class NFFBPolicyCfg(BasePolicyCfg):
     command_filter: NFFBCommandFilterCfg = field(default_factory=NFFBCommandFilterCfg)
     inner_loop: NFFBInnerLoopCfg = field(default_factory=NFFBInnerLoopCfg)
     constraints: NFFBConstraintsCfg = field(default_factory=NFFBConstraintsCfg)
+    state_predictor: VelocityModelStatePredictorCfg = field(
+        default_factory=VelocityModelStatePredictorCfg
+    )
+    velocity_response_compensation: NFFBVelocityResponseCompensationCfg = field(
+        default_factory=NFFBVelocityResponseCompensationCfg
+    )
 
     @classmethod
     def from_dict(cls, data: Mapping | None) -> "NFFBPolicyCfg":
@@ -127,6 +164,14 @@ class NFFBPolicyCfg(BasePolicyCfg):
         _update_dataclass(cfg.command_filter, policy_data.get("command_filter"))
         _update_dataclass(cfg.inner_loop, policy_data.get("inner_loop"))
         _update_dataclass(cfg.constraints, policy_data.get("constraints"))
+        cfg.state_predictor = VelocityModelStatePredictorCfg.from_dict(
+            policy_data.get("state_predictor")
+        )
+        cfg.velocity_response_compensation = (
+            NFFBVelocityResponseCompensationCfg.from_dict(
+                policy_data.get("velocity_response_compensation")
+            )
+        )
         return cfg
 
 
@@ -151,7 +196,6 @@ class NFFBPolicy(BasePolicy):
 
         self.raw_observation_dim = int(raw_observation_dim)
         self.raw_observation_fields = tuple(str(name) for name in raw_observation_fields)
-        self._field_indices = self._validate_observation_spec()
         self._resolve_auto_defaults()
         self._validate_config()
 
@@ -188,6 +232,28 @@ class NFFBPolicy(BasePolicy):
         self.max_velocity_change = self.max_acc * self.step_dt
         self.saturation_tolerance = max(float(cfg.model.epsilon), 1.0e-7)
 
+        self._resolve_predictor_defaults()
+        self._resolve_velocity_response_compensation_defaults()
+        self.state_predictor = VelocityModelStatePredictor(
+            cfg.state_predictor,
+            num_envs,
+            self.device,
+        )
+        self.velocity_response_compensator = (
+            FirstOrderVelocityResponseCompensator(
+                cfg.velocity_response_compensation,
+                num_envs,
+                self.device,
+                self.step_dt,
+                epsilon=float(cfg.model.epsilon),
+            )
+        )
+        self.reference_offset = (
+            self.state_predictor.delay_step if self.state_predictor.active else 0
+        )
+        self._validate_predictor_alignment()
+        self._validate_velocity_response_compensation_alignment()
+        self._field_indices = self._validate_observation_spec()
         self._allocate_buffers()
 
     def _allocate_buffers(self):
@@ -215,6 +281,7 @@ class NFFBPolicy(BasePolicy):
             "velocity_raw",
             "velocity_desired",
             "velocity_command",
+            "predictor_command_sync_error",
             "last_action",
         )
         for name in float_buffers:
@@ -245,6 +312,8 @@ class NFFBPolicy(BasePolicy):
                 else:
                     value[env_ids] = 0.0
         self.filter_needs_init[env_ids] = True
+        self.state_predictor.reset(env_ids)
+        self.velocity_response_compensator.reset(env_ids)
 
     def act(self, observations: dict[str, torch.Tensor] | torch.Tensor, extras: dict | None = None) -> torch.Tensor:
         """Return a physical vertical-velocity increment ``delta_vrz``."""
@@ -256,14 +325,28 @@ class NFFBPolicy(BasePolicy):
         if not bool(torch.isfinite(observation).all()):
             raise ValueError("NFFBPolicy received a non-finite observation.")
 
-        pb = observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
-        vb = observation[:, ObservationIndex.VB : ObservationIndex.VB + 1]
-        theta = observation[:, ObservationIndex.THETA : ObservationIndex.THETA + 1]
-        omega = observation[:, ObservationIndex.OMEGA : ObservationIndex.OMEGA + 1]
+        reference_positions = None
+        if self.state_predictor.active:
+            reference_positions = extract_reference_positions(
+                observation,
+                self.raw_observation_fields,
+                self.state_predictor.delay_step,
+            )
+        model_observation = self.state_predictor.predict(
+            observation[:, :11],
+            reference_positions=reference_positions,
+        )
 
-        self.p_ref.copy_(observation[:, ObservationIndex.PG : ObservationIndex.PG + 1])
-        self.v_ref.copy_(self._field(observation, "vg_0"))
-        vg_next = self._field(observation, "vg_1")
+        pb = model_observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
+        vb = model_observation[:, ObservationIndex.VB : ObservationIndex.VB + 1]
+        theta = model_observation[:, ObservationIndex.THETA : ObservationIndex.THETA + 1]
+        omega = model_observation[:, ObservationIndex.OMEGA : ObservationIndex.OMEGA + 1]
+
+        self.p_ref.copy_(
+            model_observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
+        )
+        self.v_ref.copy_(self._field(observation, f"vg_{self.reference_offset}"))
+        vg_next = self._field(observation, f"vg_{self.reference_offset + 1}")
         self.a_ref_raw.copy_((vg_next - self.v_ref) / self.step_dt)
         self.a_ref_limited.copy_(
             torch.clamp(
@@ -323,34 +406,104 @@ class NFFBPolicy(BasePolicy):
         self.beta.copy_(self.model.rope_angle(theta))
         self.velocity_raw.copy_(self.model.vertical_velocity(theta, self.omega_command))
 
-        if self.max_velocity > 0.0:
-            self.velocity_desired.copy_(
-                torch.clamp(self.velocity_raw, min=-self.max_velocity, max=self.max_velocity)
-            )
-        else:
-            self.velocity_desired.copy_(self.velocity_raw)
-        self.velocity_saturated.copy_(
-            torch.abs(self.velocity_raw - self.velocity_desired) > self.saturation_tolerance
-        )
+        pending_commands = None
+        if self.state_predictor.active:
+            pending_commands = self.state_predictor.get_pending_commands()
 
-        requested_action = self.velocity_desired - self.velocity_command
-        self.last_action.copy_(
-            torch.clamp(
-                requested_action,
-                min=-self.max_velocity_change,
-                max=self.max_velocity_change,
+        if self.velocity_response_compensator.enabled:
+            compensated_command = self.velocity_response_compensator.compensate(
+                self.velocity_raw,
+                self.velocity_command,
+                pending_commands=pending_commands,
+                max_input_change=self.max_velocity_change,
+                max_abs_input=self.max_velocity,
             )
-        )
-        self.acceleration_saturated.copy_(
-            torch.abs(requested_action - self.last_action) > self.saturation_tolerance
-        )
-        self.velocity_command.add_(self.last_action)
-        if self.max_velocity > 0.0:
-            self.velocity_command.clamp_(min=-self.max_velocity, max=self.max_velocity)
+            self.velocity_desired.copy_(
+                self.velocity_response_compensator.limited_output_z
+            )
+            self.velocity_saturated.copy_(
+                self.velocity_response_compensator.output_saturated
+                | self.velocity_response_compensator.predicted_output_clipped
+                | self.velocity_response_compensator.input_velocity_saturated
+            )
+            requested_action = compensated_command - self.velocity_command
+            self.last_action.copy_(
+                torch.clamp(
+                    requested_action,
+                    min=-self.max_velocity_change,
+                    max=self.max_velocity_change,
+                )
+            )
+            self.acceleration_saturated.copy_(
+                self.velocity_response_compensator.input_acceleration_saturated
+                | (
+                    torch.abs(requested_action - self.last_action)
+                    > self.saturation_tolerance
+                )
+            )
+            self.velocity_command.add_(self.last_action)
+            if self.max_velocity > 0.0:
+                self.velocity_command.clamp_(
+                    min=-self.max_velocity,
+                    max=self.max_velocity,
+                )
+
+            if pending_commands is not None and pending_commands.shape[0] > 0:
+                executed_input = pending_commands[0]
+            else:
+                executed_input = self.velocity_command
+            self.velocity_response_compensator.advance(executed_input)
+        else:
+            if self.max_velocity > 0.0:
+                self.velocity_desired.copy_(
+                    torch.clamp(
+                        self.velocity_raw,
+                        min=-self.max_velocity,
+                        max=self.max_velocity,
+                    )
+                )
+            else:
+                self.velocity_desired.copy_(self.velocity_raw)
+            self.velocity_saturated.copy_(
+                torch.abs(self.velocity_raw - self.velocity_desired)
+                > self.saturation_tolerance
+            )
+
+            requested_action = self.velocity_desired - self.velocity_command
+            self.last_action.copy_(
+                torch.clamp(
+                    requested_action,
+                    min=-self.max_velocity_change,
+                    max=self.max_velocity_change,
+                )
+            )
+            self.acceleration_saturated.copy_(
+                torch.abs(requested_action - self.last_action)
+                > self.saturation_tolerance
+            )
+            self.velocity_command.add_(self.last_action)
+            if self.max_velocity > 0.0:
+                self.velocity_command.clamp_(
+                    min=-self.max_velocity,
+                    max=self.max_velocity,
+                )
 
         self._update_integral()
         if not bool(torch.isfinite(self.last_action).all()):
             raise FloatingPointError("NFFBPolicy produced a non-finite action.")
+        self.state_predictor.update_after_action(self.last_action)
+        self.predictor_command_sync_error.copy_(
+            self.velocity_command - self.state_predictor.command_z
+        )
+        if self.state_predictor.active and bool(
+            torch.any(
+                torch.abs(self.predictor_command_sync_error)
+                > self.saturation_tolerance
+            )
+        ):
+            raise RuntimeError(
+                "NFFB velocity_command diverged from the state predictor command_z."
+            )
         return self.last_action.clone()
 
     def _update_command_filter(self, theta: torch.Tensor, omega: torch.Tensor):
@@ -459,6 +612,7 @@ class NFFBPolicy(BasePolicy):
             "velocity_raw",
             "velocity_desired",
             "velocity_command",
+            "predictor_command_sync_error",
             "last_action",
             "reference_acceleration_saturated",
             "ball_acceleration_saturated",
@@ -468,7 +622,15 @@ class NFFBPolicy(BasePolicy):
             "acceleration_saturated",
             "anti_windup_frozen",
         )
-        return {f"policy_{name}": getattr(self, name)[:, 0] for name in state_names}
+        state = {f"policy_{name}": getattr(self, name)[:, 0] for name in state_names}
+        state["policy_reference_offset"] = torch.full(
+            (self.num_envs,),
+            float(self.reference_offset),
+            device=self.device,
+        )
+        state.update(self.state_predictor.get_state())
+        state.update(self.velocity_response_compensator.get_state())
+        return state
 
     def get_config_info(self) -> dict[str, object]:
         """Return resolved scalar controller settings for run metadata."""
@@ -486,6 +648,19 @@ class NFFBPolicy(BasePolicy):
             "command_filter": asdict(self.cfg.command_filter),
             "inner_loop": asdict(self.cfg.inner_loop),
             "constraints": asdict(self.cfg.constraints),
+            "state_predictor": asdict(self.cfg.state_predictor),
+            "state_predictor_active": self.state_predictor.active,
+            "state_predictor_reference_offset": self.reference_offset,
+            "state_predictor_reference_fields": self._reference_field_names(),
+            "velocity_response_compensation": asdict(
+                self.cfg.velocity_response_compensation
+            ),
+            "velocity_response_compensation_active": (
+                self.velocity_response_compensator.enabled
+            ),
+            "velocity_response_compensation_parameter_source": (
+                self.velocity_response_compensator.parameter_source
+            ),
         }
 
     def to(self, device: str | torch.device):
@@ -494,6 +669,8 @@ class NFFBPolicy(BasePolicy):
         for name, value in vars(self).items():
             if isinstance(value, torch.Tensor):
                 setattr(self, name, value.to(device=device))
+        self.state_predictor.to(device)
+        self.velocity_response_compensator.to(device)
         self.device = device
         return self
 
@@ -512,13 +689,135 @@ class NFFBPolicy(BasePolicy):
         if len(set(self.raw_observation_fields)) != len(self.raw_observation_fields):
             raise ValueError("raw_observation_fields must not contain duplicate names.")
         indices = {name: index for index, name in enumerate(self.raw_observation_fields)}
-        missing = [name for name in ("vg_0", "pg_1", "vg_1") if name not in indices]
+        required_fields = [
+            *(f"pg_{offset}" for offset in range(1, max(self.reference_offset, 1) + 1)),
+            f"vg_{self.reference_offset}",
+            f"vg_{self.reference_offset + 1}",
+        ]
+        missing = [name for name in required_fields if name not in indices]
         if missing:
             raise ValueError(
-                "NFFBPolicy requires reference preview horizon >= 1 with fields "
-                f"vg_0/pg_1/vg_1; missing {missing}."
+                "NFFBPolicy requires reference preview horizon with future_steps >= "
+                f"{self.reference_offset + 1}; missing {missing}."
             )
         return indices
+
+    def _reference_field_names(self) -> list[str]:
+        fields = ["pg"]
+        if self.state_predictor.active:
+            fields.extend(
+                f"pg_{offset}"
+                for offset in range(1, self.state_predictor.delay_step + 1)
+            )
+        fields.extend(
+            (
+                f"vg_{self.reference_offset}",
+                f"vg_{self.reference_offset + 1}",
+            )
+        )
+        return fields
+
+    def _resolve_predictor_defaults(self):
+        predictor = self.cfg.state_predictor
+        if _is_auto(predictor.delay_step):
+            predictor.delay_step = 0
+        if _is_auto(predictor.step_dt) or float(predictor.step_dt) <= 0.0:
+            predictor.step_dt = self.step_dt
+        if _is_auto(predictor.max_acc) or float(predictor.max_acc) <= 0.0:
+            predictor.max_acc = self.max_acc
+        if _is_auto(predictor.max_velocity):
+            predictor.max_velocity = self.max_velocity
+
+        model_values = {
+            "plank_length": self.cfg.model.plank_length,
+            "rope_length": self.cfg.model.rope_length,
+            "ball_position_offset": self.cfg.model.ball_position_offset,
+            "gravity": self.cfg.model.gravity,
+            "ball_mass": self.cfg.model.ball_mass,
+            "ball_radius": self.cfg.model.ball_radius,
+            "ball_inertia_ratio": self.cfg.model.ball_inertia_ratio,
+            "epsilon": self.cfg.model.epsilon,
+        }
+        for name, value in model_values.items():
+            if _is_auto(getattr(predictor, name)):
+                setattr(predictor, name, value)
+
+    def _resolve_velocity_response_compensation_defaults(self):
+        compensation = self.cfg.velocity_response_compensation
+        source = compensation.normalized_parameter_source
+        compensation.parameter_source = source
+        if source != "state_predictor":
+            return
+
+        predictor = self.cfg.state_predictor
+        response_values = {
+            "tau_s": predictor.velocity_response_tau_s,
+            "gain": predictor.velocity_response_gain,
+            "bias": predictor.velocity_response_bias,
+            "max_abs_velocity": predictor.velocity_response_max_abs_velocity,
+        }
+        for name, value in response_values.items():
+            setattr(compensation, name, value)
+
+    def _validate_predictor_alignment(self):
+        if not self.state_predictor.active:
+            return
+
+        expected_values = {
+            "step_dt": self.step_dt,
+            "max_acc": self.max_acc,
+            "max_velocity": self.max_velocity,
+            "plank_length": self.model.plank_length,
+            "rope_length": self.model.rope_length,
+            "ball_position_offset": self.model.ball_position_offset,
+            "gravity": self.model.gravity,
+            "ball_mass": self.model.ball_mass,
+            "ball_radius": self.model.ball_radius,
+            "ball_inertia_ratio": self.model.ball_inertia_ratio,
+            "epsilon": self.model.epsilon,
+        }
+        for name, expected in expected_values.items():
+            actual = float(getattr(self.state_predictor, name))
+            if not math.isclose(
+                actual,
+                float(expected),
+                rel_tol=1.0e-7,
+                abs_tol=1.0e-9,
+            ):
+                raise ValueError(
+                    f"NFFB state_predictor.{name} must match the resolved NFFB "
+                    f"value; got {actual} != {float(expected)}."
+                )
+
+    def _validate_velocity_response_compensation_alignment(self):
+        compensation = self.velocity_response_compensator
+        predictor = self.state_predictor
+        if (
+            not compensation.enabled
+            or not predictor.active
+            or not predictor.velocity_response_enabled
+        ):
+            return
+
+        expected_values = {
+            "tau_s": predictor.velocity_response_tau_s,
+            "gain": predictor.velocity_response_gain,
+            "bias": predictor.velocity_response_bias,
+            "max_abs_velocity": predictor.velocity_response_max_abs_velocity,
+        }
+        for name, expected in expected_values.items():
+            actual = float(getattr(compensation, name))
+            if not math.isclose(
+                actual,
+                float(expected),
+                rel_tol=1.0e-7,
+                abs_tol=1.0e-9,
+            ):
+                raise ValueError(
+                    "NFFB velocity_response_compensation."
+                    f"{name} must match the active state predictor response model; "
+                    f"got {actual} != {float(expected)}."
+                )
 
     def _resolve_auto_defaults(self):
         model_defaults = {

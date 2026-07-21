@@ -12,7 +12,11 @@ import torch
 from gymnasium import spaces
 
 from .base_policy import BasePolicy, BasePolicyCfg
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import (
+    VelocityModelStatePredictor,
+    VelocityModelStatePredictorCfg,
+    extract_reference_positions,
+)
 from .rl_models import MLPNetworkCfg, make_agent_class_and_cfg, make_models
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
 
@@ -186,9 +190,13 @@ class RLPolicy(BasePolicy):
                 f"got {tuple(raw_obs.shape)}."
             )
 
-        # The predictor intentionally retains its legacy 11-D contract.  Any
-        # appended reference preview bypasses it and is reattached unchanged.
-        model_legacy_obs = self.state_predictor.predict(raw_obs[:, :11])
+        reference_positions = self._extract_reference_positions(raw_obs)
+        model_legacy_obs = self.state_predictor.predict(
+            raw_obs[:, :11],
+            reference_positions=reference_positions,
+        )
+        # Legacy/full11 networks do not consume the appended preview. It is
+        # retained here so the observation adapter keeps its raw-input contract.
         if raw_obs.shape[1] > 11:
             model_obs = torch.cat((model_legacy_obs, raw_obs[:, 11:]), dim=-1)
         else:
@@ -223,6 +231,18 @@ class RLPolicy(BasePolicy):
         self.state_predictor.to(device)
         self.device = device
         return self
+
+    def _extract_reference_positions(self, raw_obs: torch.Tensor) -> torch.Tensor | None:
+        if not self.state_predictor.active:
+            return None
+        fields = self.observation_adapter.raw_observation_fields
+        if not any(name.startswith("pg_") and name != "pg_0" for name in fields):
+            return None
+        return extract_reference_positions(
+            raw_obs,
+            fields,
+            self.state_predictor.delay_step,
+        )
 
     def _select_normalized_action(self, outputs) -> tuple[torch.Tensor, dict]:
         info = outputs[-1] if isinstance(outputs, tuple) and isinstance(outputs[-1], dict) else {}

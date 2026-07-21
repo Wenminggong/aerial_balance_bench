@@ -264,6 +264,65 @@ python3 scripts/cpid_policy_eval.py \
   --headless
 ```
 
+The unchanged CPID controller can also be evaluated through the unified task.
+The default run uses the nominal mixed configuration and reports global and
+per-reference-type metrics:
+
+```bash
+python3 scripts/cpid_unified_tracking_eval.py \
+  --config baselines/configs/cpid_unified_tracking_eval.yaml \
+  --episodes 16 \
+  --num_envs 16 \
+  --headless
+```
+
+For unambiguous task-level comparisons, switch to singleton environment
+configs. `constant` represents target-position balancing, while the dynamic
+configs evaluate trajectory tracking:
+
+```bash
+# Target-position balancing represented as a constant reference
+python3 scripts/cpid_unified_tracking_eval.py \
+  --config baselines/configs/cpid_unified_tracking_eval.yaml \
+  --env_config environments/configs/unified_tracking_constant.yaml \
+  --episodes 10 \
+  --num_envs 10 \
+  --run_name cpid_unified_constant_smoke \
+  --headless
+
+# Sine trajectory tracking
+python3 scripts/cpid_unified_tracking_eval.py \
+  --config baselines/configs/cpid_unified_tracking_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine.yaml \
+  --episodes 10 \
+  --num_envs 10 \
+  --run_name cpid_unified_sine_smoke \
+  --headless
+```
+
+With the state predictor disabled, CPID retains its legacy behavior of consuming
+only the first 11 fields and the current reference position `pg`. With an active
+state predictor, the unified runner also supplies `pg_1 ... pg_D`, so each
+forward-prediction step uses the reference at the same future offset. The
+preview must be enabled and satisfy `reference_preview.future_steps >=
+state_predictor.delay_step`; the runner fails at startup instead of padding a
+short preview. Reference velocities are not consumed.
+
+The response-aware `D=8` example uses a separate `H=8` environment config so
+existing `H=5` RL checkpoint layouts remain unchanged:
+
+```bash
+python3 scripts/cpid_unified_tracking_eval.py \
+  --config baselines/configs/cpid_unified_tracking_predictor_eval.yaml \
+  --episodes 2 \
+  --num_envs 2 \
+  --headless
+```
+
+Use the sine, triangle, trapezoid, random B-spline, and random ramp-dwell
+singleton configs for publishable per-family comparisons; use the mixed config
+as an aggregate transfer and sampling-coverage check.
+
 NMPC:
 
 ```bash
@@ -278,19 +337,56 @@ python3 scripts/nmpc_policy_eval.py \
 NFFB on unified reference tracking:
 
 ```bash
+# Delay-free baseline
 python3 scripts/nffb_policy_eval.py \
   --config baselines/configs/nffb_unified_tracking_eval.yaml \
-  --env_config environments/configs/unified_tracking_sine.yaml \
+  --env_config environments/configs/unified_tracking_mixed.yaml \
   --episodes 10 \
   --num_envs 10 \
-  --run_name nffb_unified_sine_smoke \
+  --run_name nffb_unified_delay_free_smoke \
+  --headless
+
+# D=8 predictor with aligned plant state and future references
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_predictor_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine.yaml \
+  --episodes 2 \
+  --num_envs 2 \
+  --run_name nffb_unified_predictor_sine_smoke \
   --headless
 ```
 
-Use `scripts/run_nffb_policy_eval_configs.sh --headless` to evaluate constant,
-sine, triangle, trapezoid, random B-spline, and random ramp-dwell singleton
-configs in sequence. NFFB requires the velocity interface, a reference preview
-horizon of at least one step, and a delay-free environment. See
+NFFB can additionally invert the deterministic nominal first-order response.
+The inverse is disabled by default and is independent of delay prediction.
+These two fixed-parameter, noise-free examples isolate the `D=0` inverse and
+the combined `D=8` predictor plus inverse:
+
+```bash
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_response_compensation_eval.yaml \
+  --episodes 2 --num_envs 2 --headless
+
+python3 scripts/nffb_policy_eval.py \
+  --config baselines/configs/nffb_unified_tracking_predictor_response_compensation_eval.yaml \
+  --episodes 2 --num_envs 2 --headless
+```
+
+For a batch over the current delayed deterministic singletons, use:
+
+```bash
+RUN_CONFIG=baselines/configs/nffb_unified_tracking_predictor_eval.yaml \
+REFERENCE_TYPES="constant sine triangle trapezoid" \
+scripts/run_nffb_policy_eval_configs.sh --headless
+```
+
+Use only delay-free environment configs with the predictor-disabled run
+config. NFFB requires the velocity interface, a reference preview
+horizon of at least one step in delay-free mode. With an action delay of
+`D > 0`, the environment and state predictor must both be enabled with the
+same `delay_step`, and the preview must satisfy `H >= D + 1`. The controller
+then uses the predicted plant state at `k + D`, `pg_D`, `vg_D`, and
+`(vg_{D+1} - vg_D) / dt`. Its integral and command filter still advance only
+once per policy call. See
 [NFFB Controller](docs/nffb_controller.md) for the model, configuration,
 diagnostics, and tuning workflow.
 
@@ -311,7 +407,7 @@ the generic NFFB defaults:
 
 ```bash
 python3 scripts/nffb_policy_eval.py \
-  --config baselines/configs/nffb_unified_tracking_eval.yaml \
+  --config baselines/configs/nffb_unified_tracking_predictor_eval.yaml \
   --env_config environments/configs/unified_tracking_sine.yaml \
   --policy_config baselines/configs/nffb_sine_phase0_acc5.yaml \
   --episodes 100 \
@@ -320,7 +416,10 @@ python3 scripts/nffb_policy_eval.py \
   --headless
 ```
 
-In the fixed `seed=666`, 500-environment validation, this policy achieved
+The command above exercises the tuned policy in the current delayed,
+response-aware environment; it is not a replay of the delay-free tuning
+result. In the original fixed `seed=666`, 500-environment delay-free
+validation, this policy achieved
 mean MAE/RMSE of `0.00602/0.00998 m`, versus `0.05259/0.06236 m` for the
 generic defaults, with no terminations or beam-edge margin violations.
 Detailed stress and acceptance results are recorded in
@@ -409,8 +508,14 @@ Template configs:
 - `environments/configs/template_eval_velocity_response_realistic.yaml`
 - `environments/configs/unified_tracking_mixed.yaml`
 - `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid,random_b_spline,random_ramp_dwell}.yaml`
+- `environments/configs/unified_tracking_triangle_predictor.yaml`
+- `baselines/configs/cpid_predictor_velocity_response.yaml`
+- `baselines/configs/cpid_unified_tracking_predictor_eval.yaml`
 - `baselines/configs/nffb.yaml`
 - `baselines/configs/nffb_unified_tracking_eval.yaml`
+- `baselines/configs/nffb_unified_tracking_predictor_eval.yaml`
+- `baselines/configs/nffb_unified_tracking_response_compensation_eval.yaml`
+- `baselines/configs/nffb_unified_tracking_predictor_response_compensation_eval.yaml`
 
 
 ### Implement a custom policy
@@ -450,11 +555,38 @@ The reference baselines use the velocity-command interface. This gives the high-
 
 To compensate for action delay, the repository includes a model-based state predictor in `baselines/model_state_predictor.py`. Predictor-enabled configs, such as `cpid_predictor_15.yaml`, `nmpc_predictor_15.yaml`, and `rl_rpo_predictor_15.yaml`, use a velocity-interface model to predict the future observation after the configured delay horizon.
 
-The current predictor compensates only the configured integer action delay. Enabling the velocity-response model does not make the predictor response-aware; such runs therefore evaluate delay compensation under an additional unmodeled command-response dynamic.
+The predictor can optionally reproduce the deterministic nominal velocity response after the delay queue and before the nonlinear state integration. Set `state_predictor.velocity_response_enabled: true` and configure `velocity_response_tau_s`, `velocity_response_gain`, `velocity_response_bias`, and `velocity_response_max_abs_velocity`. The example `cpid_predictor_velocity_response.yaml` uses explicit nominal values for randomized response ranges; evaluation runners can resolve `auto` only when each configured range has equal bounds. Gaussian/OU noise and per-environment sampled response parameters are intentionally not predicted.
 
-NFFB is currently a delay-free unified-tracking baseline and intentionally does
-not instantiate this predictor. A future delay-compensated variant will use the
-same nonlinear model with execution-time state and reference prediction.
+For moving-reference tasks, the predictor accepts the task-independent sequence
+`pg[k], ..., pg[k + D]`. The CPID unified runner and RL evaluation in
+`legacy8`/`full11` mode extract this sequence from the environment's named
+reference preview. If a sequence is not provided, the predictor holds the
+current `pg`, preserving target-position behavior. RL
+`observation_mode: reference_preview` remains incompatible with an active state
+predictor because its complete network input would need to be rebased to
+`k + D` and supplied through `k + D + H`.
+
+NFFB optionally instantiates the same predictor through
+`state_predictor` in its policy config. The feature is disabled by default.
+When enabled for an environment delay of `D` steps, the policy predicts the
+plant through the pending command queue, shifts the NFFB position/velocity/
+acceleration references to offsets `D`, `D`, and `D + 1`, and appends the new
+incremental velocity command to the predictor queue after each action. The
+predictor can reproduce a deterministic nominal first-order velocity response,
+but it does not replay Gaussian/OU noise or per-environment randomized response
+parameters.
+
+NFFB also has a separately disabled-by-default
+`velocity_response_compensation` stage. It treats the nonlinear controller
+output as the desired response velocity and applies the exact discrete inverse
+of the nominal first-order model before enforcing the interface input
+`max_velocity` and `max_acc * dt` constraints. With
+`parameter_source: state_predictor`, the inverse reuses the resolved predictor
+`tau/gain/bias/max_abs_velocity`; `D=0` works without active delay prediction.
+For `D>0`, the inverse forecasts its own nominal response state through the
+predictor's ordered pending-command queue before solving for the new input.
+This stage does not invert Gaussian/OU noise, per-environment randomized
+parameters, or the low-level flight dynamics.
 
 ### Baselines
 

@@ -2,12 +2,85 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import torch
 
 from .base_policy import ObservationIndex
+
+
+def extract_reference_positions(
+    observation: torch.Tensor,
+    observation_fields: Sequence[str],
+    future_steps: int,
+) -> torch.Tensor:
+    """Extract ``pg[0:future_steps + 1]`` from a named raw observation."""
+    if future_steps < 0:
+        raise ValueError(f"future_steps must be non-negative, got {future_steps}.")
+    if observation.ndim != 2:
+        raise ValueError(
+            "Reference extraction expects a 2-D observation, "
+            f"got shape {tuple(observation.shape)}."
+        )
+    if isinstance(observation_fields, (str, bytes)):
+        raise TypeError("observation_fields must be a sequence of field names, not a string.")
+
+    fields = tuple(str(name) for name in observation_fields)
+    if len(fields) != observation.shape[1]:
+        raise ValueError(
+            "observation_fields length must match the raw observation dimension: "
+            f"got {len(fields)} fields for shape {tuple(observation.shape)}."
+        )
+
+    current_names = [name for name in ("pg", "pg_0") if name in fields]
+    if len(current_names) != 1:
+        raise ValueError(
+            "Reference extraction requires exactly one current-reference field named "
+            f"'pg' or 'pg_0'; got {current_names or 'none'}."
+        )
+    required_fields = [current_names[0], *(f"pg_{offset}" for offset in range(1, future_steps + 1))]
+    missing_fields = [name for name in required_fields if name not in fields]
+    if missing_fields:
+        raise ValueError(
+            "Reference preview is shorter than the state-predictor horizon. "
+            f"Missing field(s): {', '.join(missing_fields)}. Configure "
+            f"reference_preview.future_steps >= {future_steps}."
+        )
+    duplicate_fields = [name for name in required_fields if fields.count(name) != 1]
+    if duplicate_fields:
+        raise ValueError(
+            "Reference preview fields must be unique; duplicate field(s): "
+            f"{', '.join(duplicate_fields)}."
+        )
+
+    indices = [fields.index(name) for name in required_fields]
+    return observation[:, indices]
+
+
+def validate_reference_preview_horizon(
+    *,
+    delay_step: int,
+    preview_enabled: bool,
+    preview_future_steps: int,
+    context: str,
+) -> None:
+    """Validate the preview contract for an active moving-reference predictor."""
+    delay_step = int(delay_step)
+    preview_future_steps = int(preview_future_steps)
+    if delay_step <= 0:
+        return
+    if not preview_enabled:
+        raise ValueError(
+            f"{context} requires reference_preview.enabled=true when the state predictor "
+            f"is active with delay_step={delay_step}."
+        )
+    if preview_future_steps < delay_step:
+        raise ValueError(
+            f"{context} requires reference_preview.future_steps >= state predictor "
+            f"delay_step; got {preview_future_steps} < {delay_step}."
+        )
 
 
 @dataclass
@@ -20,13 +93,19 @@ class VelocityModelStatePredictorCfg:
     step_dt: float | str = 0.0
     max_acc: float | str = 0.5
     max_velocity: float | str = 0.0
+    velocity_response_enabled: bool = False
+    velocity_response_tau_s: float | str = 0.0
+    velocity_response_gain: float | str = 1.0
+    velocity_response_bias: float | str = 0.0
+    velocity_response_max_abs_velocity: float | str = 0.0
     plank_length: float | str = 1.06
     rope_length: float | str = 0.9
+    ball_position_offset: float | str = 0.33
     gravity: float | str = 9.81
     ball_mass: float | str = 0.0005
     ball_radius: float | str = 0.023
-    ball_inertia_ratio: float = 0.4
-    epsilon: float = 1e-6
+    ball_inertia_ratio: float | str = 0.4
+    epsilon: float | str = 1e-6
 
     @classmethod
     def from_dict(cls, data: Mapping | None) -> "VelocityModelStatePredictorCfg":
@@ -38,6 +117,33 @@ class VelocityModelStatePredictorCfg:
             if hasattr(cfg, key):
                 setattr(cfg, key, value)
         return cfg
+
+    def resolve_velocity_response_from_robustness(self, robustness_cfg) -> None:
+        """Resolve response-model ``auto`` values from an environment config."""
+        range_fields = (
+            ("velocity_response_tau_s", "velocity_response_tau_s_range"),
+            ("velocity_response_gain", "velocity_response_gain_range"),
+            ("velocity_response_bias", "velocity_response_bias_range"),
+        )
+        for predictor_field, robustness_field in range_fields:
+            if not _is_auto(getattr(self, predictor_field)):
+                continue
+            bounds = getattr(robustness_cfg, robustness_field)
+            if len(bounds) != 2:
+                raise ValueError(f"robustness.{robustness_field} must contain exactly two values.")
+            lower, upper = (float(value) for value in bounds)
+            if lower != upper:
+                raise ValueError(
+                    f"VelocityModelStatePredictorCfg.{predictor_field}='auto' requires "
+                    f"robustness.{robustness_field} to have equal bounds; got [{lower}, {upper}]. "
+                    "Set an explicit nominal predictor value for randomized response parameters."
+                )
+            setattr(self, predictor_field, lower)
+
+        if _is_auto(self.velocity_response_max_abs_velocity):
+            self.velocity_response_max_abs_velocity = float(
+                robustness_cfg.velocity_response_max_abs_velocity
+            )
 
 
 class VelocityModelStatePredictor:
@@ -53,8 +159,29 @@ class VelocityModelStatePredictor:
         self.step_dt = self._as_float(cfg.step_dt, "step_dt")
         self.max_acc = self._as_float(cfg.max_acc, "max_acc")
         self.max_velocity = self._as_float(cfg.max_velocity, "max_velocity")
+        self.velocity_response_enabled = bool(cfg.velocity_response_enabled)
+        self.velocity_response_tau_s = self._as_float(
+            cfg.velocity_response_tau_s,
+            "velocity_response_tau_s",
+        )
+        self.velocity_response_gain = self._as_float(
+            cfg.velocity_response_gain,
+            "velocity_response_gain",
+        )
+        self.velocity_response_bias = self._as_float(
+            cfg.velocity_response_bias,
+            "velocity_response_bias",
+        )
+        self.velocity_response_max_abs_velocity = self._as_float(
+            cfg.velocity_response_max_abs_velocity,
+            "velocity_response_max_abs_velocity",
+        )
         self.plank_length = self._as_float(cfg.plank_length, "plank_length")
         self.rope_length = self._as_float(cfg.rope_length, "rope_length")
+        self.ball_position_offset = self._as_float(
+            cfg.ball_position_offset,
+            "ball_position_offset",
+        )
         self.gravity = abs(self._as_float(cfg.gravity, "gravity"))
         self.ball_mass = self._as_float(cfg.ball_mass, "ball_mass")
         self.ball_radius = self._as_float(cfg.ball_radius, "ball_radius")
@@ -65,8 +192,28 @@ class VelocityModelStatePredictor:
             raise ValueError("VelocityModelStatePredictor requires step_dt > 0.")
         if self.max_acc <= 0.0:
             raise ValueError("VelocityModelStatePredictor requires max_acc > 0.")
+        if not math.isfinite(self.velocity_response_tau_s) or self.velocity_response_tau_s < 0.0:
+            raise ValueError(
+                "VelocityModelStatePredictor requires finite velocity_response_tau_s >= 0."
+            )
+        if not math.isfinite(self.velocity_response_gain) or self.velocity_response_gain <= 0.0:
+            raise ValueError(
+                "VelocityModelStatePredictor requires finite velocity_response_gain > 0."
+            )
+        if not math.isfinite(self.velocity_response_bias):
+            raise ValueError("VelocityModelStatePredictor requires finite velocity_response_bias.")
+        if (
+            not math.isfinite(self.velocity_response_max_abs_velocity)
+            or self.velocity_response_max_abs_velocity < 0.0
+        ):
+            raise ValueError(
+                "VelocityModelStatePredictor requires finite "
+                "velocity_response_max_abs_velocity >= 0."
+            )
         if self.plank_length <= 0.0 or self.rope_length <= 0.0:
             raise ValueError("VelocityModelStatePredictor requires positive plank_length and rope_length.")
+        if not math.isfinite(self.ball_position_offset):
+            raise ValueError("VelocityModelStatePredictor requires finite ball_position_offset.")
         if self.ball_mass <= 0.0 or self.ball_radius <= 0.0:
             raise ValueError("VelocityModelStatePredictor requires positive ball_mass and ball_radius.")
         if self.ball_inertia_ratio < 0.0:
@@ -74,12 +221,28 @@ class VelocityModelStatePredictor:
         if self.solver not in {"euler", "rk4"}:
             raise ValueError("VelocityModelStatePredictor solver must be 'euler' or 'rk4'.")
 
+        response_decay = 0.0
+        if self.velocity_response_tau_s > 0.0:
+            response_decay = torch.exp(
+                torch.tensor(
+                    -self.step_dt / self.velocity_response_tau_s,
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+            ).item()
+        self.velocity_response_decay = torch.tensor(
+            response_decay,
+            device=self.device,
+            dtype=torch.float32,
+        )
         self.command_z = torch.zeros((self.num_envs, 1), device=self.device)
         self.last_action = torch.zeros((self.num_envs, 1), device=self.device)
         self.predicted_observation = torch.zeros((self.num_envs, 11), device=self.device)
         self.predicted_error = torch.zeros((self.num_envs, 1), device=self.device)
         self.predicted_error_dot = torch.zeros((self.num_envs, 1), device=self.device)
         self.predicted_error_ddot = torch.zeros((self.num_envs, 1), device=self.device)
+        self.reference_preview_used = torch.zeros((self.num_envs,), device=self.device)
+        self.reference_horizon = torch.zeros((self.num_envs,), device=self.device)
         self.read_index = 0
         if self.delay_step > 0:
             self.command_queue = torch.zeros((self.delay_step, self.num_envs, 1), device=self.device)
@@ -109,10 +272,18 @@ class VelocityModelStatePredictor:
         self.predicted_error[env_ids] = 0.0
         self.predicted_error_dot[env_ids] = 0.0
         self.predicted_error_ddot[env_ids] = 0.0
+        self.reference_preview_used[env_ids] = 0.0
+        self.reference_horizon[env_ids] = 0.0
         if self.delay_step > 0:
             self.command_queue[:, env_ids] = 0.0
 
-    def predict(self, observation: torch.Tensor, error_prev1: torch.Tensor | None = None) -> torch.Tensor:
+    def predict(
+        self,
+        observation: torch.Tensor,
+        error_prev1: torch.Tensor | None = None,
+        *,
+        reference_positions: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Return a future 11-D observation after the configured delay horizon."""
         observation = observation.to(device=self.device, dtype=torch.float32)
         if observation.shape != (self.num_envs, 11):
@@ -120,16 +291,26 @@ class VelocityModelStatePredictor:
                 "VelocityModelStatePredictor expects observation shape "
                 f"({self.num_envs}, 11), got {tuple(observation.shape)}."
             )
+        current_pg = observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
         current_error = (
             observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
-            - observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
+            - current_pg
         )
         if not self.active:
             self.predicted_observation.copy_(observation)
             self.predicted_error.copy_(current_error)
             self.predicted_error_dot.zero_()
             self.predicted_error_ddot.zero_()
+            self.reference_preview_used.zero_()
+            self.reference_horizon.zero_()
             return observation
+
+        reference_positions, preview_used = self._prepare_reference_positions(
+            reference_positions,
+            current_pg,
+        )
+        self.reference_preview_used.fill_(float(preview_used))
+        self.reference_horizon.fill_(float(self.delay_step if preview_used else 0))
 
         predicted = observation.clone()
         commands = self._pending_commands()
@@ -139,13 +320,12 @@ class VelocityModelStatePredictor:
         drz = predicted[:, ObservationIndex.DRZ].clone()
         omega_prev = predicted[:, ObservationIndex.OMEGA].clone()
         vrz_prev = predicted[:, ObservationIndex.VRZ].clone()
+        response_nominal_z = vrz_prev.clone()
 
         error_curr = current_error[:, 0].clone()
         error_prev = self._prepare_error_prev1(error_prev1, current_error)[:, 0].clone()
         predicted_error_dot = torch.zeros_like(error_curr)
         predicted_error_ddot = torch.zeros_like(error_curr)
-        pg = observation[:, ObservationIndex.PG].clone()
-
         ab = predicted[:, ObservationIndex.AB].clone()
         omega = omega_prev.clone()
         alpha = predicted[:, ObservationIndex.ALPHA].clone()
@@ -153,14 +333,17 @@ class VelocityModelStatePredictor:
         arz = predicted[:, ObservationIndex.ARZ].clone()
 
         for step_id in range(commands.shape[0]):
-            vrz = commands[step_id, :, 0]
+            vrz, response_nominal_z = self._velocity_response_step(
+                commands[step_id, :, 0],
+                response_nominal_z,
+            )
             pb, vb, theta, ab, omega = self._integrate_one_step(pb, vb, theta, vrz)
             alpha = (omega - omega_prev) / self.step_dt
             arz = (vrz - vrz_prev) / self.step_dt
             drz = drz + vrz * self.step_dt
             omega_prev = omega
             vrz_prev = vrz
-            new_error = pb - pg
+            new_error = pb - reference_positions[:, step_id + 1]
             predicted_error_dot = new_error - error_curr
             predicted_error_ddot = predicted_error_dot - (error_curr - error_prev)
             error_prev = error_curr
@@ -175,7 +358,7 @@ class VelocityModelStatePredictor:
         predicted[:, ObservationIndex.DRZ] = drz
         predicted[:, ObservationIndex.VRZ] = vrz
         predicted[:, ObservationIndex.ARZ] = arz
-        predicted[:, ObservationIndex.PG] = observation[:, ObservationIndex.PG]
+        predicted[:, ObservationIndex.PG] = reference_positions[:, -1]
         predicted[:, ObservationIndex.A_PREV] = observation[:, ObservationIndex.A_PREV]
 
         self.predicted_observation.copy_(predicted)
@@ -187,6 +370,10 @@ class VelocityModelStatePredictor:
     def get_error_prediction(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return predicted error and its horizon-local finite differences."""
         return self.predicted_error, self.predicted_error_dot, self.predicted_error_ddot
+
+    def get_pending_commands(self) -> torch.Tensor:
+        """Return a read-only ordered copy of commands awaiting execution."""
+        return self._pending_commands()
 
     def update_after_action(self, action: torch.Tensor):
         """Mirror VelocityInterface command accumulation and enqueue the command."""
@@ -211,6 +398,33 @@ class VelocityModelStatePredictor:
                 device=self.device,
             ),
             "policy_predictor_command_z": self.command_z[:, 0],
+            "policy_predictor_reference_preview_used": self.reference_preview_used,
+            "policy_predictor_reference_horizon": self.reference_horizon,
+            "policy_predictor_velocity_response_enabled": torch.full(
+                (self.num_envs,),
+                float(self.active and self.velocity_response_enabled),
+                device=self.device,
+            ),
+            "policy_predictor_velocity_response_tau_s": torch.full(
+                (self.num_envs,),
+                self.velocity_response_tau_s,
+                device=self.device,
+            ),
+            "policy_predictor_velocity_response_gain": torch.full(
+                (self.num_envs,),
+                self.velocity_response_gain,
+                device=self.device,
+            ),
+            "policy_predictor_velocity_response_bias": torch.full(
+                (self.num_envs,),
+                self.velocity_response_bias,
+                device=self.device,
+            ),
+            "policy_predictor_velocity_response_max_abs_velocity": torch.full(
+                (self.num_envs,),
+                self.velocity_response_max_abs_velocity,
+                device=self.device,
+            ),
             "policy_predictor_error": self.predicted_error[:, 0],
             "policy_predictor_error_dot": self.predicted_error_dot[:, 0],
             "policy_predictor_error_ddot": self.predicted_error_ddot[:, 0],
@@ -241,11 +455,68 @@ class VelocityModelStatePredictor:
         self.device = device
         return self
 
+    def _prepare_reference_positions(
+        self,
+        reference_positions: torch.Tensor | None,
+        current_pg: torch.Tensor,
+    ) -> tuple[torch.Tensor, bool]:
+        if reference_positions is None:
+            return current_pg.expand(-1, self.delay_step + 1), False
+
+        reference_positions = reference_positions.to(device=self.device, dtype=torch.float32)
+        expected_shape = (self.num_envs, self.delay_step + 1)
+        if reference_positions.shape != expected_shape:
+            raise ValueError(
+                "VelocityModelStatePredictor expects reference_positions shape "
+                f"{expected_shape}, got {tuple(reference_positions.shape)}."
+            )
+        if not torch.all(torch.isfinite(reference_positions)):
+            raise ValueError("VelocityModelStatePredictor reference_positions must be finite.")
+
+        tolerance = max(abs(self.epsilon), 1.0e-6)
+        if not torch.allclose(
+            reference_positions[:, :1],
+            current_pg,
+            rtol=0.0,
+            atol=tolerance,
+        ):
+            max_error = torch.max(torch.abs(reference_positions[:, :1] - current_pg)).item()
+            raise ValueError(
+                "VelocityModelStatePredictor reference_positions[:, 0] must match the "
+                f"observation PG (max error {max_error:.6g}, tolerance {tolerance:.6g})."
+            )
+        return reference_positions, True
+
     def _pending_commands(self) -> torch.Tensor:
         if self.delay_step <= 0:
             return self.command_queue
         ordered_ids = (torch.arange(self.delay_step, device=self.device) + self.read_index) % self.delay_step
         return self.command_queue[ordered_ids].clone()
+
+    def _velocity_response_step(
+        self,
+        input_z: torch.Tensor,
+        previous_nominal_z: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply the simulator's deterministic first-order response for one step."""
+        if not self.velocity_response_enabled:
+            return input_z, input_z
+
+        target_z = self.velocity_response_gain * input_z + self.velocity_response_bias
+        if self.velocity_response_tau_s > 0.0:
+            nominal_z = self.velocity_response_decay * previous_nominal_z
+            nominal_z += (1.0 - self.velocity_response_decay) * target_z
+        else:
+            nominal_z = target_z
+
+        executed_z = nominal_z
+        if self.velocity_response_max_abs_velocity > 0.0:
+            executed_z = torch.clamp(
+                executed_z,
+                min=-self.velocity_response_max_abs_velocity,
+                max=self.velocity_response_max_abs_velocity,
+            )
+        return executed_z, nominal_z
 
     def _prepare_error_prev1(self, error_prev1: torch.Tensor | None, current_error: torch.Tensor) -> torch.Tensor:
         if error_prev1 is None:
@@ -303,7 +574,9 @@ class VelocityModelStatePredictor:
         omega = -vrz * torch.cos(beta) / denominator
         ball_inertia = self.ball_inertia_ratio * self.ball_mass * self.ball_radius**2
         effective_mass = ball_inertia / self.ball_radius**2 + self.ball_mass
-        ab = self.ball_mass * (pb + 0.33 - self.plank_length) * omega.square()
+        ab = self.ball_mass * (
+            pb + self.ball_position_offset - self.plank_length
+        ) * omega.square()
         ab -= self.ball_mass * self.gravity * torch.sin(theta)
         ab = ab / effective_mass
         return torch.stack((vb, ab, omega), dim=-1)
@@ -332,3 +605,7 @@ class VelocityModelStatePredictor:
                 raise ValueError(f"VelocityModelStatePredictorCfg.{field_name} must be resolved before use.")
             return int(value)
         return int(value)
+
+
+def _is_auto(value) -> bool:
+    return isinstance(value, str) and value.lower() == "auto"

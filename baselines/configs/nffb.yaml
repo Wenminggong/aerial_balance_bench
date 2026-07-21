@@ -30,3 +30,37 @@ constraints:
   max_acc: auto
   max_velocity: auto
   max_reference_acceleration: auto
+
+# Optional action-delay compensation. It is disabled by default so existing
+# delay-free NFFB runs and tuning results keep their original behavior.
+state_predictor:
+  enabled: false
+  delay_step: 0
+  solver: rk4
+  step_dt: auto
+  max_acc: auto
+  max_velocity: auto
+  velocity_response_enabled: false
+  velocity_response_tau_s: 0.0
+  velocity_response_gain: 1.0
+  velocity_response_bias: 0.0
+  velocity_response_max_abs_velocity: 0.0
+  plank_length: auto
+  rope_length: auto
+  ball_position_offset: auto
+  gravity: auto
+  ball_mass: auto
+  ball_radius: auto
+  ball_inertia_ratio: auto
+  epsilon: auto
+
+# Optional deterministic inverse of the first-order response model. With
+# parameter_source=state_predictor, the resolved predictor response parameters
+# are copied even when delay prediction itself is inactive.
+velocity_response_compensation:
+  enabled: false
+  parameter_source: state_predictor
+  tau_s: 0.0
+  gain: 1.0
+  bias: 0.0
+  max_abs_velocity: 0.0

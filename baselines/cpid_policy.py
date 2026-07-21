@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 import torch
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
-from .model_state_predictor import VelocityModelStatePredictor, VelocityModelStatePredictorCfg
+from .model_state_predictor import (
+    VelocityModelStatePredictor,
+    VelocityModelStatePredictorCfg,
+    extract_reference_positions,
+)
 
 
 @dataclass
@@ -74,6 +78,7 @@ class CPIDPolicy(BasePolicy):
         num_envs: int,
         device: str | torch.device,
         step_dt: float,
+        raw_observation_fields: Sequence[str] | None = None,
     ):
         super().__init__(cfg, num_envs, device)
         if step_dt <= 0.0:
@@ -82,6 +87,13 @@ class CPIDPolicy(BasePolicy):
         self.max_vel_change = float(cfg.velocity_pid.max_acc) * self.step_dt
         self._resolve_predictor_cfg_defaults()
         self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        if isinstance(raw_observation_fields, (str, bytes)):
+            raise TypeError("raw_observation_fields must be a sequence of field names, not a string.")
+        self.raw_observation_fields = (
+            None
+            if raw_observation_fields is None
+            else tuple(str(name) for name in raw_observation_fields)
+        )
 
         self.theta_ref = torch.zeros((self.num_envs, 1), device=self.device)
         self.error_prev1 = torch.zeros((self.num_envs, 1), device=self.device)
@@ -136,6 +148,7 @@ class CPIDPolicy(BasePolicy):
             raise ValueError(f"CPIDPolicy expects an 11-D observation, got shape {tuple(raw_obs.shape)}.")
         if raw_obs.shape[0] != self.num_envs:
             raise ValueError(f"CPIDPolicy expected {self.num_envs} envs, got {raw_obs.shape[0]}.")
+        reference_positions = self._extract_reference_positions(raw_obs)
         raw_obs = raw_obs[:, :11]
         raw_pb = raw_obs[:, ObservationIndex.PB : ObservationIndex.PB + 1]
         raw_pg = raw_obs[:, ObservationIndex.PG : ObservationIndex.PG + 1]
@@ -146,7 +159,11 @@ class CPIDPolicy(BasePolicy):
             self.error_prev1[init_envs] = self.raw_error[init_envs]
             self.error_prev2[init_envs] = self.raw_error[init_envs]
 
-        obs = self.state_predictor.predict(raw_obs, error_prev1=self.error_prev1)
+        obs = self.state_predictor.predict(
+            raw_obs,
+            error_prev1=self.error_prev1,
+            reference_positions=reference_positions,
+        )
 
         current_theta = obs[:, ObservationIndex.THETA : ObservationIndex.THETA + 1]
 
@@ -209,6 +226,20 @@ class CPIDPolicy(BasePolicy):
         self.state_predictor.to(device)
         self.device = device
         return self
+
+    def _extract_reference_positions(self, raw_obs: torch.Tensor) -> torch.Tensor | None:
+        if not self.state_predictor.active or self.raw_observation_fields is None:
+            return None
+        if not any(
+            name.startswith("pg_") and name != "pg_0"
+            for name in self.raw_observation_fields
+        ):
+            return None
+        return extract_reference_positions(
+            raw_obs,
+            self.raw_observation_fields,
+            self.state_predictor.delay_step,
+        )
 
     def _resolve_predictor_cfg_defaults(self):
         predictor_cfg = self.cfg.state_predictor

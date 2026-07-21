@@ -223,7 +223,8 @@ def _build_env_cfg(config: dict[str, Any], seed: int) -> AerialBalanceEnvCfg:
     return env_cfg
 
 
-def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
+def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg, policy_cfg: NFFBPolicyCfg):
+    predictor_cfg = policy_cfg.state_predictor
     validate_nffb_environment_contract(
         task_name=env_cfg.task_name,
         interface_name=env_cfg.interface_name,
@@ -232,6 +233,8 @@ def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
         robustness_enabled=bool(env_cfg.robustness.enabled),
         action_delay_enabled=bool(env_cfg.robustness.action_delay_enabled),
         delay_step=int(env_cfg.robustness.delay_step),
+        state_predictor_enabled=bool(predictor_cfg.enabled),
+        state_predictor_delay_step=int(predictor_cfg.delay_step),
     )
 
 
@@ -267,6 +270,38 @@ def _resolve_policy_cfg_from_env(policy_cfg: NFFBPolicyCfg, env_cfg: AerialBalan
         raise ValueError(
             "NFFB max_acc must match velocity_interface.max_acc so policy and environment action limits agree."
         )
+
+    predictor = policy_cfg.state_predictor
+    if _is_auto(predictor.delay_step):
+        if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
+            predictor.delay_step = int(env_cfg.robustness.delay_step)
+        else:
+            predictor.delay_step = 0
+    if _is_auto(predictor.step_dt) or float(predictor.step_dt) <= 0.0:
+        predictor.step_dt = float(step_dt)
+    if _is_auto(predictor.max_acc):
+        predictor.max_acc = float(constraints.max_acc)
+    if _is_auto(predictor.max_velocity):
+        predictor.max_velocity = float(constraints.max_velocity)
+
+    predictor_model_fields = (
+        "plank_length",
+        "rope_length",
+        "ball_position_offset",
+        "gravity",
+        "ball_mass",
+        "ball_radius",
+        "ball_inertia_ratio",
+        "epsilon",
+    )
+    for name in predictor_model_fields:
+        if _is_auto(getattr(predictor, name)):
+            setattr(predictor, name, float(getattr(model, name)))
+    predictor.resolve_velocity_response_from_robustness(env_cfg.robustness)
+
+    compensation = policy_cfg.velocity_response_compensation
+    compensation.parameter_source = compensation.normalized_parameter_source
+    compensation.resolve_from_robustness(env_cfg.robustness)
 
 
 def _make_output_dir(run_config: dict[str, Any], seed: int, target_episodes: int) -> Path:
@@ -338,7 +373,9 @@ def main():
     torch.manual_seed(seed)
 
     env_cfg = _build_env_cfg(env_config, seed)
-    _validate_env_cfg(env_cfg)
+    configured_step_dt = float(env_cfg.sim.dt) * int(env_cfg.decimation)
+    _resolve_policy_cfg_from_env(policy_cfg, env_cfg, configured_step_dt)
+    _validate_env_cfg(env_cfg, policy_cfg)
     runner_cfg = run_config.get("runner", {})
     target_episodes = max(
         int(args_cli.episodes if args_cli.episodes is not None else runner_cfg.get("target_episodes", 1)),
@@ -364,7 +401,15 @@ def main():
             )
 
         base_env = env.unwrapped
-        _resolve_policy_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
+        if not math.isclose(
+            float(base_env.step_dt),
+            configured_step_dt,
+            rel_tol=1.0e-9,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError(
+                "Resolved NFFB step_dt does not match the environment control step."
+            )
         policy = NFFBPolicy(
             policy_cfg,
             base_env.num_envs,
