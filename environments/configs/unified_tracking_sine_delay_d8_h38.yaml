@@ -30,7 +30,7 @@ unified_tracking_task:
 
 reference_preview:
   enabled: true
-  future_steps: 30
+  future_steps: 38
 
 velocity_interface:
   max_acc: 5.0
@@ -43,7 +43,7 @@ robustness:
   recompute_ball_inertia: true
   controller_gain_variation_enabled: false
   controller_gain_range: [10.0, 10.0]
-  action_delay_enabled: false
+  action_delay_enabled: true
   delay_step: 8
   velocity_response_enabled: true
   velocity_response_tau_s_range: [0.150, 0.160]
@@ -78,4 +78,4 @@ runner:
 
 logging:
   root_dir: logs/zero_action/unified_tracking
-  run_name: zero_action_unified_tracking_sine
+  run_name: zero_action_unified_tracking_sine_delay_d8_h38

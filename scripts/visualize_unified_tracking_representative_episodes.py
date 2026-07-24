@@ -1,4 +1,4 @@
-"""Plot representative NFFB or CPID unified-tracking episodes."""
+"""Plot representative NFFB, CPID, or RL unified-tracking episodes."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=
 import matplotlib.pyplot as plt
 
 
-DEFAULT_RUN_DIR = Path("logs/nffb/unified_tracking/nffb_unified_sine_test")
+DEFAULT_RUN_DIR = Path("logs/nffb_unified_tracking/unified_tracking/nffb_unified_sine_delay_free")
 DEFAULT_STEP_DT = 1.0 / 60.0
 
 
@@ -30,7 +30,7 @@ class ControllerSignals:
     """Controller-specific desired-signal fields."""
 
     controller_name: str
-    theta_desired_key: str
+    theta_desired_key: str | None
     vertical_velocity_desired_key: str
 
 
@@ -39,7 +39,7 @@ class VisualizationResult:
     """Representative-episode selection and generated output."""
 
     controller_name: str
-    theta_desired_key: str
+    theta_desired_key: str | None
     vertical_velocity_desired_key: str
     best_id: int
     best_rmse: float
@@ -51,7 +51,7 @@ class VisualizationResult:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Visualize the lowest- and highest-RMSE episodes in an NFFB or CPID rollout."
+        description="Visualize the lowest- and highest-RMSE episodes in an NFFB, CPID, or RL rollout."
     )
     parser.add_argument(
         "run_dir",
@@ -109,7 +109,10 @@ def _step_dt(run_dir: Path, resolved_run: dict) -> float:
     return DEFAULT_STEP_DT
 
 
-def _controller_signals(rollout: np.lib.npyio.NpzFile) -> ControllerSignals:
+def _controller_signals(
+    rollout: np.lib.npyio.NpzFile,
+    resolved_run: dict,
+) -> ControllerSignals:
     keys = set(rollout.files)
     if "policy_theta_d" in keys:
         if "policy_velocity_desired" not in keys:
@@ -141,10 +144,37 @@ def _controller_signals(rollout: np.lib.npyio.NpzFile) -> ControllerSignals:
             vertical_velocity_desired_key=velocity_key,
         )
 
+    algorithm = str(resolved_run.get("algorithm", "")).lower()
+    rl_markers = {"rl_physical_action", "rl_normalized_action", "normalized_actions"}
+    if algorithm in {"ppo", "rpo"} or keys.intersection(rl_markers):
+        velocity_candidates = (
+            "step_vrz_cmd",
+            "step_command_z",
+            "policy_predictor_command_z",
+        )
+        velocity_key = next((key for key in velocity_candidates if key in keys), None)
+        if velocity_key is None:
+            raise KeyError(
+                "Detected an RL rollout, but no absolute vertical-velocity command "
+                f"was found. Tried: {velocity_candidates}."
+            )
+        return ControllerSignals(
+            controller_name="RL",
+            theta_desired_key=None,
+            vertical_velocity_desired_key=velocity_key,
+        )
+
     raise ValueError(
         "Unsupported rollout controller. Expected NFFB field 'policy_theta_d' "
-        "or CPID field 'policy_theta_ref'."
+        "or CPID field 'policy_theta_ref', or RL rollout metadata/action fields."
     )
+
+
+def _controller_title(controller_name: str, resolved_run: dict) -> str:
+    if controller_name != "RL":
+        return controller_name
+    algorithm = str(resolved_run.get("algorithm", "")).strip().upper()
+    return f"RL ({algorithm})" if algorithm else "RL"
 
 
 def _reference_label(resolved_run: dict) -> str:
@@ -182,7 +212,7 @@ def _validate_signal(rollout: np.lib.npyio.NpzFile, key: str, expected_shape: tu
 def _plot_pair(
     ax: plt.Axes,
     time_s: np.ndarray,
-    desired: np.ndarray,
+    desired: np.ndarray | None,
     actual: np.ndarray,
     episode_ids: tuple[int, int],
     colors: tuple[str, str],
@@ -190,14 +220,15 @@ def _plot_pair(
 ) -> None:
     ranks = ("Best", "Worst")
     for rank, episode_id, color in zip(ranks, episode_ids, colors):
-        ax.plot(
-            time_s,
-            desired[:, episode_id],
-            color=color,
-            linestyle="--",
-            linewidth=2.0,
-            label=f"{rank} (episode ID {episode_id}) — {quantity}",
-        )
+        if desired is not None:
+            ax.plot(
+                time_s,
+                desired[:, episode_id],
+                color=color,
+                linestyle="--",
+                linewidth=2.0,
+                label=f"{rank} (episode ID {episode_id}) — {quantity}",
+            )
         ax.plot(
             time_s,
             actual[:, episode_id],
@@ -230,16 +261,20 @@ def visualize(
             )
         num_steps, num_episodes, _ = observations.shape
         signal_shape = (num_steps, num_episodes)
-        controller_signals = _controller_signals(rollout)
+        controller_signals = _controller_signals(rollout, resolved_run)
 
         pb = observations[..., _observation_index(rollout, "pb")]
         pg = observations[..., _observation_index(rollout, "pg")]
         theta = observations[..., _observation_index(rollout, "theta")]
         vertical_velocity = observations[..., _observation_index(rollout, "vrz")]
-        theta_desired = _validate_signal(
-            rollout,
-            controller_signals.theta_desired_key,
-            signal_shape,
+        theta_desired = (
+            _validate_signal(
+                rollout,
+                controller_signals.theta_desired_key,
+                signal_shape,
+            )
+            if controller_signals.theta_desired_key is not None
+            else None
         )
         vertical_velocity_desired = _validate_signal(
             rollout,
@@ -288,7 +323,10 @@ def visualize(
             colors,
             r"desired $\theta$",
         )
-        axes[1].set_title(r"(b) Beam Angle Tracking")
+        if theta_desired is None:
+            axes[1].set_title(r"(b) Beam Angle (RL has no explicit desired $\theta$)")
+        else:
+            axes[1].set_title(r"(b) Beam Angle Tracking")
         axes[1].set_ylabel(r"Beam angle $\theta$ (rad)")
 
         _plot_pair(
@@ -306,7 +344,8 @@ def visualize(
         axes[2].set_xlim(time_s[0], time_s[-1])
 
         fig.suptitle(
-            f"{controller_signals.controller_name} {reference_label} Tracking: "
+            f"{_controller_title(controller_signals.controller_name, resolved_run)} "
+            f"{reference_label} Tracking: "
             "Best and Worst Episodes\n"
             f"Best ID {best_id}: RMSE = {best_rmse:.5f} m    |    "
             f"Worst ID {worst_id}: RMSE = {worst_rmse:.5f} m",
@@ -345,7 +384,10 @@ def main() -> None:
     )
     result = visualize(run_dir, output_path, args.dpi)
     print(f"Detected controller: {result.controller_name}")
-    print(f"Desired theta signal: {result.theta_desired_key}")
+    if result.theta_desired_key is None:
+        print("Desired theta signal: unavailable (RL has no explicit beam-angle target)")
+    else:
+        print(f"Desired theta signal: {result.theta_desired_key}")
     print(f"Desired vertical-velocity signal: {result.vertical_velocity_desired_key}")
     print(f"Best episode ID: {result.best_id} (RMSE={result.best_rmse:.8f} m)")
     print(f"Worst episode ID: {result.worst_id} (RMSE={result.worst_rmse:.8f} m)")

@@ -22,6 +22,7 @@ def make_cfg(**values) -> VelocityModelStatePredictorCfg:
         solver="euler",
         step_dt=0.1,
         max_acc=10.0,
+        velocity_response_enabled=False,
     )
     for key, value in values.items():
         setattr(cfg, key, value)
@@ -95,7 +96,7 @@ def test_disabled_response_preserves_legacy_prediction():
     assert legacy_prediction[0, ObservationIndex.VRZ].item() == pytest.approx(0.5)
 
 
-def test_legacy_dict_configuration_keeps_response_disabled():
+def test_default_dict_configuration_uses_nominal_sim_response():
     cfg = VelocityModelStatePredictorCfg.from_dict(
         {
             "enabled": True,
@@ -106,10 +107,10 @@ def test_legacy_dict_configuration_keeps_response_disabled():
 
     predictor = VelocityModelStatePredictor(cfg, 1, "cpu")
 
-    assert predictor.velocity_response_enabled is False
-    assert predictor.velocity_response_tau_s == 0.0
+    assert predictor.velocity_response_enabled is True
+    assert predictor.velocity_response_tau_s == pytest.approx(0.139)
     assert predictor.velocity_response_gain == 1.0
-    assert predictor.velocity_response_bias == 0.0
+    assert predictor.velocity_response_bias == pytest.approx(-0.00055)
     assert predictor.velocity_response_max_abs_velocity == 0.0
 
 
@@ -266,8 +267,9 @@ def test_exact_first_order_response_updates_vrz_drz_and_arz():
     prediction = predictor.predict(make_observation(1))
 
     decay = torch.exp(torch.tensor(-0.5)).item()
-    first_vrz = 1.0 - decay
-    second_vrz = 1.0 - decay**2
+    response_target = 1.0 - 0.00055
+    first_vrz = (1.0 - decay) * response_target
+    second_vrz = (1.0 - decay**2) * response_target
     assert prediction[0, ObservationIndex.VRZ].item() == pytest.approx(second_vrz)
     assert prediction[0, ObservationIndex.DRZ].item() == pytest.approx(
         0.1 * (first_vrz + second_vrz)
@@ -314,8 +316,8 @@ def test_response_is_applied_to_commands_in_delay_queue_order():
 
     prediction = predictor.predict(make_observation(1))
     decay = torch.exp(torch.tensor(-1.0)).item()
-    first_vrz = (1.0 - decay) * 0.4
-    expected_vrz = decay * first_vrz + (1.0 - decay) * 0.5
+    first_vrz = (1.0 - decay) * (0.4 - 0.00055)
+    expected_vrz = decay * first_vrz + (1.0 - decay) * (0.5 - 0.00055)
     assert prediction[0, ObservationIndex.VRZ].item() == pytest.approx(expected_vrz)
 
 
@@ -371,12 +373,13 @@ def test_vectorized_response_matches_simulator_nominal_model_with_output_clippin
     )
     expected_vrz = initial_z
     for command in commands:
-        expected_vrz = response_model.step(
+        response_model.step(
             command,
             0.1,
             "none",
             max_abs_velocity=max_abs_velocity,
-        ).clone()
+        )
+        expected_vrz = response_model.executed_z.clone()
 
     prediction = predictor.predict(make_observation(2, vrz=initial_z))
 
@@ -396,10 +399,16 @@ def test_auto_response_parameters_require_fixed_environment_ranges():
         velocity_response_max_abs_velocity="auto",
     )
     robustness_cfg = SimpleNamespace(
+        enabled=True,
+        velocity_response_enabled=True,
         velocity_response_tau_s_range=(0.2, 0.2),
         velocity_response_gain_range=(0.9, 0.9),
         velocity_response_bias_range=(-0.01, -0.01),
         velocity_response_max_abs_velocity=0.75,
+        velocity_response_sim_tau_s=0.139,
+        velocity_response_sim_gain=1.0,
+        velocity_response_sim_bias=-0.00055,
+        velocity_response_sim_max_abs_velocity=0.0,
     )
 
     predictor_cfg.resolve_velocity_response_from_robustness(robustness_cfg)
@@ -413,6 +422,34 @@ def test_auto_response_parameters_require_fixed_environment_ranges():
     robustness_cfg.velocity_response_tau_s_range = (0.1, 0.3)
     with pytest.raises(ValueError, match="explicit nominal predictor value"):
         randomized_cfg.resolve_velocity_response_from_robustness(robustness_cfg)
+
+
+def test_auto_response_parameters_use_sim_model_when_environment_response_is_disabled():
+    predictor_cfg = make_cfg(
+        velocity_response_tau_s="auto",
+        velocity_response_gain="auto",
+        velocity_response_bias="auto",
+        velocity_response_max_abs_velocity="auto",
+    )
+    robustness_cfg = SimpleNamespace(
+        enabled=True,
+        velocity_response_enabled=False,
+        velocity_response_tau_s_range=(0.1, 0.3),
+        velocity_response_gain_range=(0.7, 1.2),
+        velocity_response_bias_range=(-0.1, 0.1),
+        velocity_response_max_abs_velocity=0.8,
+        velocity_response_sim_tau_s=0.139,
+        velocity_response_sim_gain=1.0,
+        velocity_response_sim_bias=-0.00055,
+        velocity_response_sim_max_abs_velocity=0.0,
+    )
+
+    predictor_cfg.resolve_velocity_response_from_robustness(robustness_cfg)
+
+    assert predictor_cfg.velocity_response_tau_s == pytest.approx(0.139)
+    assert predictor_cfg.velocity_response_gain == pytest.approx(1.0)
+    assert predictor_cfg.velocity_response_bias == pytest.approx(-0.00055)
+    assert predictor_cfg.velocity_response_max_abs_velocity == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(

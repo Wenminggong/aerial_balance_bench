@@ -387,6 +387,14 @@ class AerialBalanceEnv(DirectRLEnv):
         )
 
     def _create_task_and_evaluator(self, cfg: AerialBalanceEnvCfg):
+        preview_future_steps = (
+            int(cfg.reference_preview.future_steps) if cfg.reference_preview.enabled else 0
+        )
+        # Include one extra position sample for the forward difference defining
+        # the velocity at the final preview offset.
+        reference_horizon_s = (
+            self.max_episode_length + preview_future_steps + 1
+        ) * self.step_dt
         if cfg.task_name == "target_position":
             return (
                 TargetPositionTask(cfg.target_position_task, self.num_envs, self.device),
@@ -401,6 +409,7 @@ class AerialBalanceEnv(DirectRLEnv):
                     self.step_dt,
                     cfg.beam_position_min,
                     cfg.beam_position_max,
+                    reference_horizon_s=reference_horizon_s,
                 ),
                 TrajectoryTrackingEvaluator(
                     cfg.trajectory_tracking_evaluator,
@@ -418,6 +427,7 @@ class AerialBalanceEnv(DirectRLEnv):
                     self.step_dt,
                     cfg.beam_position_min,
                     cfg.beam_position_max,
+                    reference_horizon_s=reference_horizon_s,
                 ),
                 UnifiedTrackingEvaluator(
                     cfg.unified_tracking_evaluator,

@@ -1,0 +1,52 @@
+policy_name: rl
+algorithm: rpo
+observation_mode: relative_reference_preview
+reference_preview_samples: 10
+checkpoint_path: null
+load_checkpoint: true
+deterministic: true
+physical_action_limit: auto
+
+network:
+  layer_num: 3
+  hidden_dim: 256
+  clip_actions: true
+  clip_log_std: true
+  min_log_std: -20.0
+  max_log_std: 2.0
+  reduction: sum
+  pid_obs: false
+
+agent:
+  discount_factor: 0.99
+  lambda: 0.95
+  learning_rate: 0.0003
+  grad_norm_clip: 0.5
+  ratio_clip: 0.2
+  value_clip: 0.2
+  clip_predicted_values: true
+  entropy_loss_scale: 0.0
+  value_loss_scale: 1.0
+  kl_threshold: 0
+  rewards_shaper: null
+  time_limit_bootstrap: false
+
+state_predictor:
+  enabled: true
+  delay_step: auto
+  solver: rk4
+  step_dt: auto
+  max_acc: auto
+  max_velocity: auto
+  velocity_response_enabled: true
+  velocity_response_tau_s: 0.155
+  velocity_response_gain: 0.86
+  velocity_response_bias: -0.0035
+  velocity_response_max_abs_velocity: 0.0
+  plank_length: auto
+  rope_length: auto
+  gravity: auto
+  ball_mass: auto
+  ball_radius: auto
+  ball_inertia_ratio: 0.4
+  epsilon: 1.0e-6

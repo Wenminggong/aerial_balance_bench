@@ -93,10 +93,10 @@ class VelocityModelStatePredictorCfg:
     step_dt: float | str = 0.0
     max_acc: float | str = 0.5
     max_velocity: float | str = 0.0
-    velocity_response_enabled: bool = False
-    velocity_response_tau_s: float | str = 0.0
+    velocity_response_enabled: bool = True
+    velocity_response_tau_s: float | str = 0.139
     velocity_response_gain: float | str = 1.0
-    velocity_response_bias: float | str = 0.0
+    velocity_response_bias: float | str = -0.00055
     velocity_response_max_abs_velocity: float | str = 0.0
     plank_length: float | str = 1.06
     rope_length: float | str = 0.9
@@ -119,31 +119,54 @@ class VelocityModelStatePredictorCfg:
         return cfg
 
     def resolve_velocity_response_from_robustness(self, robustness_cfg) -> None:
-        """Resolve response-model ``auto`` values from an environment config."""
-        range_fields = (
-            ("velocity_response_tau_s", "velocity_response_tau_s_range"),
-            ("velocity_response_gain", "velocity_response_gain_range"),
-            ("velocity_response_bias", "velocity_response_bias_range"),
+        """Resolve ``auto`` as the final response or nominal simulator model."""
+        response_active = bool(
+            getattr(robustness_cfg, "enabled", False)
+            and getattr(robustness_cfg, "velocity_response_enabled", False)
         )
-        for predictor_field, robustness_field in range_fields:
+        target_or_sim_fields = (
+            (
+                "velocity_response_tau_s",
+                "velocity_response_tau_s_range",
+                "velocity_response_sim_tau_s",
+            ),
+            (
+                "velocity_response_gain",
+                "velocity_response_gain_range",
+                "velocity_response_sim_gain",
+            ),
+            (
+                "velocity_response_bias",
+                "velocity_response_bias_range",
+                "velocity_response_sim_bias",
+            ),
+        )
+        for predictor_field, target_field, sim_field in target_or_sim_fields:
             if not _is_auto(getattr(self, predictor_field)):
                 continue
-            bounds = getattr(robustness_cfg, robustness_field)
+            if not response_active:
+                setattr(self, predictor_field, float(getattr(robustness_cfg, sim_field)))
+                continue
+
+            bounds = getattr(robustness_cfg, target_field)
             if len(bounds) != 2:
-                raise ValueError(f"robustness.{robustness_field} must contain exactly two values.")
+                raise ValueError(f"robustness.{target_field} must contain exactly two values.")
             lower, upper = (float(value) for value in bounds)
             if lower != upper:
                 raise ValueError(
                     f"VelocityModelStatePredictorCfg.{predictor_field}='auto' requires "
-                    f"robustness.{robustness_field} to have equal bounds; got [{lower}, {upper}]. "
+                    f"robustness.{target_field} to have equal bounds; got [{lower}, {upper}]. "
                     "Set an explicit nominal predictor value for randomized response parameters."
                 )
             setattr(self, predictor_field, lower)
 
         if _is_auto(self.velocity_response_max_abs_velocity):
-            self.velocity_response_max_abs_velocity = float(
-                robustness_cfg.velocity_response_max_abs_velocity
+            max_field = (
+                "velocity_response_max_abs_velocity"
+                if response_active
+                else "velocity_response_sim_max_abs_velocity"
             )
+            self.velocity_response_max_abs_velocity = float(getattr(robustness_cfg, max_field))
 
 
 class VelocityModelStatePredictor:

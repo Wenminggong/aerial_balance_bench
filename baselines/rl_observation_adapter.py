@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -15,6 +16,7 @@ class RLObservationAdapterCfg:
     """Configuration for mapping benchmark observations to RL inputs."""
 
     observation_mode: str = "legacy8"
+    reference_preview_samples: int | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping | None) -> "RLObservationAdapterCfg":
@@ -24,6 +26,8 @@ class RLObservationAdapterCfg:
         policy_data = data.get("rl_policy", data.get("policy", data))
         if "observation_mode" in policy_data:
             cfg.observation_mode = str(policy_data["observation_mode"])
+        if "reference_preview_samples" in policy_data:
+            cfg.reference_preview_samples = policy_data["reference_preview_samples"]
         return cfg
 
 
@@ -58,6 +62,18 @@ class RLObservationAdapter:
         "a_prev",
     )
     REFERENCE_PREVIEW_PLANT_FIELDS = FULL11_FIELDS[:9]
+    RELATIVE_REFERENCE_PREVIEW_BASE_FIELDS = (
+        "e_b",
+        "e_vb",
+        "ab",
+        "theta",
+        "omega",
+        "alpha",
+        "vrz",
+        "arz",
+        "a_prev",
+    )
+    PREVIEW_OBSERVATION_MODES = {"reference_preview", "relative_reference_preview"}
 
     def __init__(
         self,
@@ -66,23 +82,61 @@ class RLObservationAdapter:
         device: str | torch.device,
         raw_observation_dim: int | None = None,
         raw_observation_fields: Sequence[str] | None = None,
+        reference_preview_base_offset: int = 0,
     ):
         self.cfg = cfg
         self.num_envs = int(num_envs)
         self.device = torch.device(device)
         self.observation_mode = str(cfg.observation_mode).lower()
-        if self.observation_mode not in {"legacy8", "full11", "reference_preview"}:
+        if self.observation_mode not in {
+            "legacy8",
+            "full11",
+            *self.PREVIEW_OBSERVATION_MODES,
+        }:
             raise ValueError(
-                "RL observation_mode must be 'legacy8', 'full11', or 'reference_preview'."
+                "RL observation_mode must be 'legacy8', 'full11', 'reference_preview', "
+                "or 'relative_reference_preview'."
             )
 
         self.raw_observation_dim, self.raw_observation_fields = self._resolve_raw_observation_spec(
             raw_observation_dim,
             raw_observation_fields,
         )
+        self.reference_preview_base_offset = self._resolve_reference_preview_base_offset(
+            reference_preview_base_offset
+        )
+        if self.observation_mode != "relative_reference_preview" and self.reference_preview_base_offset != 0:
+            raise ValueError(
+                "reference_preview_base_offset is only supported for "
+                "observation_mode='relative_reference_preview'."
+            )
         self.reference_preview_future_steps: int | None = None
-        if self.observation_mode == "reference_preview":
+        self.effective_reference_preview_future_steps: int | None = None
+        self.reference_preview_samples: int | None = None
+        self.sampled_reference_preview_offsets: tuple[int, ...] = ()
+        self.sampled_reference_preview_source_offsets: tuple[int, ...] = ()
+        self._vg_base_index: int | None = None
+        self._sampled_pg_indices: tuple[int, ...] = ()
+        self._sampled_vg_indices: tuple[int, ...] = ()
+        if self.observation_mode in self.PREVIEW_OBSERVATION_MODES:
             self.reference_preview_future_steps = self._validate_reference_preview_spec()
+        if self.observation_mode == "relative_reference_preview":
+            (
+                self.reference_preview_samples,
+                self.sampled_reference_preview_offsets,
+                self.sampled_reference_preview_source_offsets,
+            ) = self._resolve_relative_reference_preview_sampling()
+            self._vg_base_index = self.raw_observation_fields.index(
+                f"vg_{self.reference_preview_base_offset}"
+            )
+            self._sampled_pg_indices = tuple(
+                self.raw_observation_fields.index(f"pg_{offset}")
+                for offset in self.sampled_reference_preview_source_offsets
+            )
+            self._sampled_vg_indices = tuple(
+                self.raw_observation_fields.index(f"vg_{offset}")
+                for offset in self.sampled_reference_preview_source_offsets
+            )
 
         self.error_prev1 = torch.zeros((self.num_envs, 1), device=self.device)
         self.error_prev2 = torch.zeros((self.num_envs, 1), device=self.device)
@@ -98,6 +152,9 @@ class RLObservationAdapter:
             return 8
         if self.observation_mode == "full11":
             return 11
+        if self.observation_mode == "relative_reference_preview":
+            assert self.reference_preview_samples is not None
+            return len(self.RELATIVE_REFERENCE_PREVIEW_BASE_FIELDS) + 2 * self.reference_preview_samples
         return self.raw_observation_dim
 
     @property
@@ -106,6 +163,11 @@ class RLObservationAdapter:
             return self.LEGACY8_FIELDS
         if self.observation_mode == "full11":
             return self.FULL11_FIELDS
+        if self.observation_mode == "relative_reference_preview":
+            fields = list(self.RELATIVE_REFERENCE_PREVIEW_BASE_FIELDS)
+            fields.extend(f"delta_pg_{offset}" for offset in self.sampled_reference_preview_offsets)
+            fields.extend(f"delta_vg_{offset}" for offset in self.sampled_reference_preview_offsets)
+            return tuple(fields)
         assert self.reference_preview_future_steps is not None
         fields = [*self.REFERENCE_PREVIEW_PLANT_FIELDS, "a_prev", "pg_0", "vg_0"]
         for offset in range(1, self.reference_preview_future_steps + 1):
@@ -117,6 +179,17 @@ class RLObservationAdapter:
         """Return reference offsets consumed by the preview policy input."""
         if self.reference_preview_future_steps is None:
             return ()
+        if self.observation_mode == "relative_reference_preview":
+            return self.sampled_reference_preview_offsets
+        return tuple(range(self.reference_preview_future_steps + 1))
+
+    @property
+    def preview_source_offsets(self) -> tuple[int, ...]:
+        """Return raw reference offsets backing the preview policy input."""
+        if self.reference_preview_future_steps is None:
+            return ()
+        if self.observation_mode == "relative_reference_preview":
+            return self.sampled_reference_preview_source_offsets
         return tuple(range(self.reference_preview_future_steps + 1))
 
     def reset(self, env_ids: Sequence[int] | torch.Tensor | None = None):
@@ -144,12 +217,45 @@ class RLObservationAdapter:
                 f"got {tuple(observation.shape)}."
             )
 
-        if self.observation_mode == "reference_preview":
+        if self.observation_mode in self.PREVIEW_OBSERVATION_MODES:
             if observation.shape[1] != self.raw_observation_dim:
                 raise ValueError(
-                    "RLObservationAdapter reference_preview input dimension does not match its raw "
-                    f"observation spec: expected {self.raw_observation_dim}, got {observation.shape[1]}."
+                    f"RLObservationAdapter {self.observation_mode} input dimension does not match "
+                    "its raw observation spec: "
+                    f"expected {self.raw_observation_dim}, got {observation.shape[1]}."
                 )
+
+        if self.observation_mode == "relative_reference_preview":
+            pb = observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
+            vb = observation[:, ObservationIndex.VB : ObservationIndex.VB + 1]
+            pg_base = observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
+            assert self._vg_base_index is not None
+            vg_base = observation[:, self._vg_base_index : self._vg_base_index + 1]
+            error = pb - pg_base
+            velocity_error = vb - vg_base
+            sampled_pg = observation[:, self._sampled_pg_indices]
+            sampled_vg = observation[:, self._sampled_vg_indices]
+            policy_input = torch.cat(
+                (
+                    error,
+                    velocity_error,
+                    observation[:, ObservationIndex.AB : ObservationIndex.AB + 1],
+                    observation[:, ObservationIndex.THETA : ObservationIndex.THETA + 1],
+                    observation[:, ObservationIndex.OMEGA : ObservationIndex.OMEGA + 1],
+                    observation[:, ObservationIndex.ALPHA : ObservationIndex.ALPHA + 1],
+                    observation[:, ObservationIndex.VRZ : ObservationIndex.VRZ + 1],
+                    observation[:, ObservationIndex.ARZ : ObservationIndex.ARZ + 1],
+                    observation[:, ObservationIndex.A_PREV : ObservationIndex.A_PREV + 1],
+                    sampled_pg - pg_base,
+                    sampled_vg - vg_base,
+                ),
+                dim=-1,
+            )
+            self.error.copy_(error)
+            self.last_policy_input.copy_(policy_input)
+            return policy_input
+
+        if self.observation_mode == "reference_preview":
             policy_input = torch.cat(
                 (
                     observation[:, :9],
@@ -253,6 +359,71 @@ class RLObservationAdapter:
                 f"got {self.raw_observation_fields}."
             )
         return future_steps
+
+    def _resolve_relative_reference_preview_sampling(
+        self,
+    ) -> tuple[int, tuple[int, ...], tuple[int, ...]]:
+        raw_future_steps = self.reference_preview_future_steps
+        assert raw_future_steps is not None
+        base_offset = self.reference_preview_base_offset
+        if base_offset > raw_future_steps:
+            raise ValueError(
+                "relative_reference_preview requires reference_preview_base_offset <= raw "
+                f"reference_preview.future_steps; got D={base_offset}, H_raw={raw_future_steps}."
+            )
+        effective_future_steps = raw_future_steps - base_offset
+        self.effective_reference_preview_future_steps = effective_future_steps
+        configured_samples = self.cfg.reference_preview_samples
+        if configured_samples is None:
+            raise ValueError(
+                "relative_reference_preview requires policy configuration "
+                "reference_preview_samples=K with a positive integer value."
+            )
+        if isinstance(configured_samples, bool):
+            raise TypeError("reference_preview_samples must be a positive integer, not bool.")
+        try:
+            samples = operator.index(configured_samples)
+        except TypeError as exc:
+            raise TypeError("reference_preview_samples must be a positive integer.") from exc
+        if samples <= 0:
+            raise ValueError(
+                "relative_reference_preview requires reference_preview_samples > 0; "
+                f"got K={samples}."
+            )
+        if effective_future_steps < samples:
+            raise ValueError(
+                "relative_reference_preview requires effective preview horizon "
+                "H_effective=H_raw-D >= reference_preview_samples; "
+                f"got H_raw={raw_future_steps}, D={base_offset}, "
+                f"H_effective={effective_future_steps}, K={samples}."
+            )
+        if effective_future_steps % samples != 0:
+            raise ValueError(
+                "relative_reference_preview requires effective preview horizon "
+                "H_effective=H_raw-D to be an integer multiple of reference_preview_samples "
+                "for uniform sampling; "
+                f"got H_raw={raw_future_steps}, D={base_offset}, "
+                f"H_effective={effective_future_steps}, K={samples}."
+            )
+        stride = effective_future_steps // samples
+        offsets = tuple(stride * sample for sample in range(1, samples + 1))
+        source_offsets = tuple(base_offset + offset for offset in offsets)
+        return samples, offsets, source_offsets
+
+    @staticmethod
+    def _resolve_reference_preview_base_offset(value: int) -> int:
+        if isinstance(value, bool):
+            raise TypeError("reference_preview_base_offset must be a non-negative integer, not bool.")
+        try:
+            offset = operator.index(value)
+        except TypeError as exc:
+            raise TypeError("reference_preview_base_offset must be a non-negative integer.") from exc
+        if offset < 0:
+            raise ValueError(
+                "reference_preview_base_offset must be non-negative; "
+                f"got D={offset}."
+            )
+        return offset
 
     @classmethod
     def _default_raw_observation_fields(cls, raw_observation_dim: int) -> tuple[str, ...]:

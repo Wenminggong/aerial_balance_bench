@@ -1,0 +1,13 @@
+env_config: environments/configs/unified_tracking_constant_delay_d8_h38.yaml
+policy_config: baselines/configs/rl_rpo_relative_reference_preview_predictor_eval.yaml
+checkpoint_path: null
+
+runner:
+  target_episodes: 1000
+  max_steps: null
+  render: false
+  save_rollout: true
+
+logging:
+  root_dir: logs/rl_unified_tracking/rpo_unified_tracking_relative_reference_preview_train_norminal_seed_2026
+  run_name: rpo_unified_tracking_relative_reference_preview_predictor_d8_eval

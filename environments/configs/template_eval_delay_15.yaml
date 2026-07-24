@@ -30,7 +30,7 @@ robustness:
   action_delay_enabled: true
   delay_step: 15
   velocity_response_enabled: true
-  velocity_response_tau_s_range: [0.01, 0.02]
+  velocity_response_tau_s_range: [0.150, 0.160]
   velocity_response_gain_range: [0.85, 0.90]
   velocity_response_bias_range: [-0.00444, -0.00238]
   velocity_response_noise_mode: none

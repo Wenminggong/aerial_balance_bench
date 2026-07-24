@@ -106,7 +106,7 @@ Unified configs can enable a configurable short reference preview:
 ```yaml
 reference_preview:
   enabled: true
-  future_steps: 5
+  future_steps: 30
 ```
 
 The legacy 11-D prefix and all of its indices remain unchanged. With a preview horizon `H`, the environment appends:
@@ -115,7 +115,16 @@ The legacy 11-D prefix and all of its indices remain unchanged. With a preview h
 [vg_0, pg_1, vg_1, ..., pg_H, vg_H]
 ```
 
-The resulting raw dimension is `12 + 2H` (22 for the supplied `H = 5` configs). The RL `reference_preview` adapter consumes plant state, previous action, and all current/future position and velocity references. Existing `legacy8` and `full11` adapters continue to consume only the legacy prefix.
+The resulting raw dimension is `12 + 2H` (72 for the standard unified `H = 30` configs). The RL `reference_preview` adapter consumes plant state, previous action, and every current/future position and velocity reference. Existing `legacy8` and `full11` adapters continue to consume only the legacy prefix.
+
+For a fixed-size, relative preview input, configure the RL policy separately:
+
+```yaml
+observation_mode: relative_reference_preview
+reference_preview_samples: 10
+```
+
+Without delay compensation, this mode requires `H >= K` and `H % K == 0`. It samples offsets `H/K, 2H/K, ..., H` and produces `[pb-pg_0, vb-vg_0, ab, theta, omega, alpha, vrz, arz, a_prev, delta_pg_1:K, delta_vg_1:K]`. With `H = 30` and `K = 10`, the sampled offsets are `3, 6, ..., 30` and the policy input has 29 dimensions. Predictor-enabled evaluation retains this field layout by using raw `H=38`, base offset `D=8`, and effective horizon `H-D=30`.
 
 ### Rewards and termination
 
@@ -169,10 +178,28 @@ Robustness settings are configured under `robustness` in the environment YAML fi
 | Ball-mass variation | `ball_mass_variation_enabled`, `ball_mass_range` | Tests generalization to object parameter changes. |
 | Low-level gain variation | `controller_gain_variation_enabled`, `controller_gain_range` | Tests sensitivity to imperfect command tracking by the drone controller. |
 | Action delay | `action_delay_enabled`, `delay_step` | Inserts a fixed-step command delay between high-level output and executed command. |
-| Velocity response | `velocity_response_enabled`, FOPDT and noise parameters | Applies an independently sampled first-order response after the optional delay; supports no noise, Gaussian noise, or OU noise. |
+| Velocity response | `velocity_response_enabled`, target ranges, sim scalars, and noise parameters | Uses a feed-forward lead-lag command so the existing velocity loop approximates a configured final first-order response; supports no noise, Gaussian noise, or OU noise. |
 | External disturbance | `external_disturbance_enabled`, OU process parameters | Applies temporally correlated vertical motion at the otherwise fixed beam endpoint. |
 
-The delay and velocity-response stages are independent. With both enabled, the command passes through the fixed-step delay first and then the first-order response. Response parameter ranges are sampled independently for every environment at episode reset; equal range endpoints select deterministic parameters. The response model changes the velocity command sent to the existing low-level controller, so the simulated physical `vrz` also includes that controller and plant dynamics.
+The delay and velocity-response stages are independent. With both enabled, the
+command passes through the fixed-step delay first and then the lead-lag stage.
+When `velocity_response_enabled: false`, the stage is an exact command
+passthrough. When enabled, `velocity_response_tau_s_range`,
+`velocity_response_gain_range`, and `velocity_response_bias_range` describe the
+desired final response \(G_{real}\). The fixed scalars
+`velocity_response_sim_tau_s: 0.139`, `velocity_response_sim_gain: 1.0`, and
+`velocity_response_sim_bias: -0.00055` describe the existing velocity-loop
+model \(G_{sim}\) that is inverted by the feed-forward command. The simulator
+output limit must currently remain zero.
+
+At each control step, the model first advances the sampled target response and
+adds the configured Gaussian/OU output noise. It then computes the command that
+the discrete \(G_{sim}\) model would require to realize that target on the next
+step. `velocity_response_executed_z` is therefore the desired final response,
+while `velocity_response_compensated_command_z` is the command sent to the
+low-level controller. The implementation does not invert the controller's
+intrinsic pure delay and does not limit the compensated command. Controller
+gain or mass randomization can also make the fixed inverse only approximate.
 
 ## User Guide
 
@@ -308,8 +335,9 @@ preview must be enabled and satisfy `reference_preview.future_steps >=
 state_predictor.delay_step`; the runner fails at startup instead of padding a
 short preview. Reference velocities are not consumed.
 
-The response-aware `D=8` example uses a separate `H=8` environment config so
-existing `H=5` RL checkpoint layouts remain unchanged:
+The response-aware `D=8` example uses a separate `H=8` environment config;
+the standard unified RL configs use `H=30`, while legacy full-preview policy
+templates remain available for checkpoints trained with the earlier layout:
 
 ```bash
 python3 scripts/cpid_unified_tracking_eval.py \
@@ -455,6 +483,27 @@ families. In particular, `unified_tracking_random_b_spline.yaml` and
 four-family training distribution. CPID and NMPC retain their existing task
 paths.
 
+Evaluate the same 29-D relative-preview checkpoint with an eight-step model
+predictor and an aligned 38-step raw preview:
+
+```bash
+python3 scripts/rl_policy_eval.py \
+  --config baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml \
+  --env_config environments/configs/unified_tracking_sine_delay_d8_h38.yaml \
+  --checkpoint /path/to/best_agent.pt \
+  --episodes 1000 \
+  --num_envs 10 \
+  --run_name rpo_unified_sine_predictor_d8_eval \
+  --headless
+```
+
+The six `unified_tracking_<type>_delay_d8_h38.yaml` configs isolate action
+delay: response dynamics, parameter randomization, and additive response noise
+are disabled. For deterministic response-aware evaluation, enable the response
+in a separate fixed-parameter/noise-free environment config and set explicit
+nominal predictor `velocity_response_tau_s`, `gain`, and `bias` values through
+`policy_overrides`; do not resolve `auto` from randomized parameter ranges.
+
 ### Train an RL policy using RPO
 
 ```bash
@@ -467,7 +516,7 @@ python3 scripts/rl_train.py \
 
 The default RPO training configuration uses the velocity interface and the `legacy8` observation adapter.
 
-Train one RPO policy on the four-family mixed distribution with a five-step position/velocity reference preview:
+Train one RPO policy on the mixed distribution with a 30-step preview sampled at 10 uniformly spaced future offsets:
 
 ```bash
 python3 scripts/rl_train.py \
@@ -477,7 +526,12 @@ python3 scripts/rl_train.py \
   --headless
 ```
 
-The preview policy mode is not compatible with an active delay state predictor (`enabled: true` with `delay_step > 0`). Use the predictor-disabled policy templates supplied for unified training and evaluation.
+RL training still requires the state predictor to be disabled. During
+evaluation/deployment, `relative_reference_preview` can be combined with an
+active predictor when the predictor and environment delays match and the raw
+preview includes both the delay and the checkpoint's effective preview
+horizon. The full `reference_preview` mode remains incompatible with an active
+predictor.
 
 
 ### Configuration files
@@ -508,6 +562,7 @@ Template configs:
 - `environments/configs/template_eval_velocity_response_realistic.yaml`
 - `environments/configs/unified_tracking_mixed.yaml`
 - `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid,random_b_spline,random_ramp_dwell}.yaml`
+- `environments/configs/unified_tracking_{constant,sine,triangle,trapezoid,random_b_spline,random_ramp_dwell}_delay_d8_h38.yaml`
 - `environments/configs/unified_tracking_triangle_predictor.yaml`
 - `baselines/configs/cpid_predictor_velocity_response.yaml`
 - `baselines/configs/cpid_unified_tracking_predictor_eval.yaml`
@@ -516,6 +571,8 @@ Template configs:
 - `baselines/configs/nffb_unified_tracking_predictor_eval.yaml`
 - `baselines/configs/nffb_unified_tracking_response_compensation_eval.yaml`
 - `baselines/configs/nffb_unified_tracking_predictor_response_compensation_eval.yaml`
+- `baselines/configs/rl_rpo_relative_reference_preview_predictor_eval.yaml`
+- `baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml`
 
 
 ### Implement a custom policy
@@ -555,16 +612,27 @@ The reference baselines use the velocity-command interface. This gives the high-
 
 To compensate for action delay, the repository includes a model-based state predictor in `baselines/model_state_predictor.py`. Predictor-enabled configs, such as `cpid_predictor_15.yaml`, `nmpc_predictor_15.yaml`, and `rl_rpo_predictor_15.yaml`, use a velocity-interface model to predict the future observation after the configured delay horizon.
 
-The predictor can optionally reproduce the deterministic nominal velocity response after the delay queue and before the nonlinear state integration. Set `state_predictor.velocity_response_enabled: true` and configure `velocity_response_tau_s`, `velocity_response_gain`, `velocity_response_bias`, and `velocity_response_max_abs_velocity`. The example `cpid_predictor_velocity_response.yaml` uses explicit nominal values for randomized response ranges; evaluation runners can resolve `auto` only when each configured range has equal bounds. Gaussian/OU noise and per-environment sampled response parameters are intentionally not predicted.
+The predictor reproduces the deterministic nominal velocity response after the
+delay queue and before nonlinear state integration. Its default response is the
+nominal simulator model `0.139 / 1.0 / -0.00055`. For `auto` predictor fields,
+evaluation resolves the configured final target response when the environment
+lead-lag stage is active, requiring equal target-range endpoints; when that
+stage is inactive, it resolves the fixed `velocity_response_sim_*` scalars.
+Gaussian/OU noise and per-environment randomized target parameters are
+intentionally not predicted.
 
 For moving-reference tasks, the predictor accepts the task-independent sequence
 `pg[k], ..., pg[k + D]`. The CPID unified runner and RL evaluation in
 `legacy8`/`full11` mode extract this sequence from the environment's named
 reference preview. If a sequence is not provided, the predictor holds the
-current `pg`, preserving target-position behavior. RL
-`observation_mode: reference_preview` remains incompatible with an active state
-predictor because its complete network input would need to be rebased to
-`k + D` and supplied through `k + D + H`.
+current `pg`, preserving target-position behavior. RL evaluation additionally
+supports an active predictor with
+`observation_mode: relative_reference_preview`: the predictor advances only
+the plant state through `k + D`, while the adapter rebases the position and
+velocity preview at offset `D`. A checkpoint trained with `D=0`, `H=30`, and
+`K=10` therefore evaluates with `D=8`, raw `H=38`, and the same effective
+30-step/29-D input. Full `reference_preview` plus predictor and all
+predictor-enabled RL training remain unsupported.
 
 NFFB optionally instantiates the same predictor through
 `state_predictor` in its policy config. The feature is disabled by default.

@@ -99,7 +99,7 @@ except Exception:  # pragma: no cover
 from aerial_balance_bench.baselines import (
     RLPolicy,
     RLPolicyCfg,
-    validate_reference_preview_horizon,
+    validate_rl_predictor_environment_contract,
 )
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
@@ -123,6 +123,9 @@ STEP_EXTRA_FIELDS = (
     "velocity_response_tau_s",
     "velocity_response_gain",
     "velocity_response_bias",
+    "velocity_response_sim_tau_s",
+    "velocity_response_sim_gain",
+    "velocity_response_sim_bias",
     "velocity_response_noise_mode_id",
     "velocity_response_noise_std",
     "velocity_response_ou_theta",
@@ -132,6 +135,7 @@ STEP_EXTRA_FIELDS = (
     "velocity_response_nominal_z",
     "velocity_response_noise_z",
     "velocity_response_executed_z",
+    "velocity_response_compensated_command_z",
     "velocity_response_error_z",
     "external_disturbance_enabled",
     "external_disturbance_vel_z",
@@ -256,15 +260,20 @@ def _resolve_predictor_cfg_from_env(policy_cfg: RLPolicyCfg, env_cfg: AerialBala
     predictor_cfg.resolve_velocity_response_from_robustness(env_cfg.robustness)
 
 
-def _validate_predictor_reference_preview(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg):
+def _validate_predictor_environment_contract(policy_cfg: RLPolicyCfg, env_cfg: AerialBalanceEnvCfg):
     predictor_cfg = policy_cfg.state_predictor
-    if env_cfg.task_name != "unified_tracking" or not predictor_cfg.enabled:
-        return
-    validate_reference_preview_horizon(
-        delay_step=int(predictor_cfg.delay_step),
+    validate_rl_predictor_environment_contract(
+        observation_mode=policy_cfg.observation_mode,
+        reference_preview_samples=policy_cfg.reference_preview_samples,
+        predictor_enabled=bool(predictor_cfg.enabled),
+        predictor_delay_step=int(predictor_cfg.delay_step),
         preview_enabled=bool(env_cfg.reference_preview.enabled),
         preview_future_steps=int(env_cfg.reference_preview.future_steps),
-        context="RL unified tracking",
+        robustness_enabled=bool(env_cfg.robustness.enabled),
+        action_delay_enabled=bool(env_cfg.robustness.action_delay_enabled),
+        environment_delay_step=int(env_cfg.robustness.delay_step),
+        moving_reference=env_cfg.task_name == "unified_tracking",
+        context=f"RL {env_cfg.task_name}",
     )
 
 
@@ -399,7 +408,7 @@ def main():
         base_env = env.unwrapped
         physical_action_limit = float(base_env.action_space.high[0])
         _resolve_predictor_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
-        _validate_predictor_reference_preview(policy_cfg, env_cfg)
+        _validate_predictor_environment_contract(policy_cfg, env_cfg)
         policy = RLPolicy(
             policy_cfg,
             base_env.num_envs,
@@ -436,6 +445,20 @@ def main():
                 "reference_preview_enabled": env_cfg.reference_preview.enabled,
                 "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
                 "reference_preview_offsets": list(base_env.reference_preview_offsets),
+                "reference_preview_samples": policy.observation_adapter.reference_preview_samples,
+                "policy_reference_preview_raw_future_steps": (
+                    policy.observation_adapter.reference_preview_future_steps
+                ),
+                "policy_reference_preview_base_offset": (
+                    policy.observation_adapter.reference_preview_base_offset
+                ),
+                "policy_reference_preview_effective_future_steps": (
+                    policy.observation_adapter.effective_reference_preview_future_steps
+                ),
+                "policy_preview_offsets": list(policy.observation_adapter.preview_offsets),
+                "policy_preview_source_offsets": list(
+                    policy.observation_adapter.preview_source_offsets
+                ),
                 "physical_action_limit": physical_action_limit,
                 "checkpoint_path": policy_cfg.checkpoint_path,
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,

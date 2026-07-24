@@ -240,12 +240,13 @@ def main():
             else 0
         )
     if (
-        policy_cfg.observation_mode == "reference_preview"
+        policy_cfg.observation_mode in {"reference_preview", "relative_reference_preview"}
         and policy_cfg.state_predictor.enabled
         and int(predictor_delay_step) > 0
     ):
         raise ValueError(
-            "observation_mode='reference_preview' does not support an active state_predictor. "
+            f"observation_mode='{policy_cfg.observation_mode}' does not support an active "
+            "state_predictor. "
             "Disable state_predictor for unified tracking training."
         )
     train_cfg = run_config.get("training", {})
@@ -271,7 +272,10 @@ def main():
 
         base_env = env.unwrapped
         physical_action_limit = float(base_env.action_space.high[0])
-        adapter_cfg = RLObservationAdapterCfg(observation_mode=policy_cfg.observation_mode)
+        adapter_cfg = RLObservationAdapterCfg(
+            observation_mode=policy_cfg.observation_mode,
+            reference_preview_samples=policy_cfg.reference_preview_samples,
+        )
         train_env = NormalizedRLTrainingWrapper(
             env,
             adapter_cfg,
@@ -298,7 +302,7 @@ def main():
         if checkpoint_interval is None:
             checkpoint_interval = max(1, max_iterations * base_env.max_episode_length // 5)
         wandb_kwargs = dict(train_cfg.get("wandb_kwargs", {}))
-        wandb_kwargs["project"] = "aerial_balance_bench"
+        wandb_kwargs.setdefault("project", "aerial_balance_bench")
         default_overrides = {
             "rollouts": memory_size,
             "learning_epochs": int(train_cfg.get("learning_epochs", 4)),
@@ -318,7 +322,7 @@ def main():
             default_overrides["alpha"] = float(train_cfg.get("rpo_alpha", 0.5))
         _deep_update(default_overrides, agent_overrides)
         default_overrides.setdefault("experiment", {}).setdefault("wandb_kwargs", {})
-        default_overrides["experiment"]["wandb_kwargs"]["project"] = "aerial_balance_bench"
+        default_overrides["experiment"]["wandb_kwargs"].setdefault("project", "aerial_balance_bench")
 
         agent_cls, agent_cfg = make_agent_class_and_cfg(
             policy_cfg.algorithm,
@@ -363,6 +367,18 @@ def main():
                 "reference_preview_enabled": env_cfg.reference_preview.enabled,
                 "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
                 "reference_preview_offsets": list(base_env.reference_preview_offsets),
+                "reference_preview_samples": train_env.adapter.reference_preview_samples,
+                "policy_reference_preview_raw_future_steps": (
+                    train_env.adapter.reference_preview_future_steps
+                ),
+                "policy_reference_preview_base_offset": (
+                    train_env.adapter.reference_preview_base_offset
+                ),
+                "policy_reference_preview_effective_future_steps": (
+                    train_env.adapter.effective_reference_preview_future_steps
+                ),
+                "policy_preview_offsets": list(train_env.adapter.preview_offsets),
+                "policy_preview_source_offsets": list(train_env.adapter.preview_source_offsets),
                 "physical_action_limit": physical_action_limit,
                 "max_iterations": max_iterations,
                 "trainer_timesteps": trainer_cfg["timesteps"],

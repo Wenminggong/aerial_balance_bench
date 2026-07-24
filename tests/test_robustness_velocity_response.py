@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 import sys
 import types
 from types import SimpleNamespace
@@ -73,6 +72,7 @@ def make_env(num_envs: int = 1, interface_name: str = "velocity"):
     return SimpleNamespace(
         cfg=SimpleNamespace(interface_name=interface_name),
         step_dt=0.1,
+        vrz=torch.zeros(num_envs),
         control_interface=FakeVelocityInterface(num_envs),
     )
 
@@ -97,13 +97,15 @@ def test_disabled_response_is_exact_passthrough():
     assert manager.velocity_response_enabled.item() == 0.0
 
 
-def test_delay_precedes_first_order_response():
+def test_delay_precedes_lead_lag_response():
     cfg = make_cfg(
         enabled=True,
         action_delay_enabled=True,
         delay_step=1,
         velocity_response_enabled=True,
-        velocity_response_tau_s_range=(0.1, 0.1),
+        velocity_response_tau_s_range=(0.139, 0.139),
+        velocity_response_gain_range=(1.0, 1.0),
+        velocity_response_bias_range=(-0.00055, -0.00055),
     )
     manager = RobustnessManager(cfg, 1, "cpu")
     env = make_env()
@@ -117,8 +119,9 @@ def test_delay_precedes_first_order_response():
 
     assert first_z == 0.0
     assert manager.delayed_command_z.item() == 1.0
-    assert second["executed_command_z"].item() == pytest.approx(1.0 - math.exp(-1.0))
+    assert second["executed_command_z"].item() == pytest.approx(1.0)
     assert manager.velocity_response_input_z.item() == 1.0
+    assert manager.velocity_response_executed_z.item() != pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -140,7 +143,9 @@ def test_delay_and_response_flags_are_independent(
         action_delay_enabled=action_delay_enabled,
         delay_step=1,
         velocity_response_enabled=velocity_response_enabled,
-        velocity_response_tau_s_range=(0.0, 0.0),
+        velocity_response_tau_s_range=(0.139, 0.139),
+        velocity_response_gain_range=(1.0, 1.0),
+        velocity_response_bias_range=(-0.00055, -0.00055),
     )
     manager = RobustnessManager(cfg, 1, "cpu")
     env = make_env()
@@ -168,10 +173,13 @@ def test_reset_samples_each_environment_and_preserves_unselected_state():
     env = make_env(3)
     manager.velocity_response_nominal_z[:] = torch.tensor([10.0, 20.0, 30.0])
     env.control_interface.executed_velocity[:, 2] = torch.tensor([1.0, 2.0, 3.0])
+    env.vrz[:] = torch.tensor([4.0, 5.0, 6.0])
 
     manager._reset_velocity_response(env, torch.tensor([1]))
 
-    assert torch.equal(manager.velocity_response_nominal_z, torch.tensor([10.0, 2.0, 30.0]))
+    assert torch.equal(manager.velocity_response_nominal_z, torch.tensor([10.0, 5.0, 30.0]))
+    assert manager.velocity_response_input_z[1].item() == pytest.approx(2.0)
+    assert manager.velocity_response_compensated_command_z[1].item() == pytest.approx(2.0)
     assert 0.1 <= manager.velocity_response_tau_s[1].item() <= 0.3
     assert 0.8 <= manager.velocity_response_gain[1].item() <= 1.2
     assert manager.velocity_response_tau_s[0].item() == 0.0
@@ -191,6 +199,30 @@ def test_invalid_configuration_and_interface_fail_fast():
             1,
             "cpu",
         )
+    with pytest.raises(ValueError, match="sim_tau_s"):
+        RobustnessManager(
+            make_cfg(velocity_response_sim_tau_s=0.0),
+            1,
+            "cpu",
+        )
+    with pytest.raises(ValueError, match="sim_gain"):
+        RobustnessManager(
+            make_cfg(velocity_response_sim_gain=0.0),
+            1,
+            "cpu",
+        )
+    with pytest.raises(ValueError, match="sim_bias"):
+        RobustnessManager(
+            make_cfg(velocity_response_sim_bias=float("nan")),
+            1,
+            "cpu",
+        )
+    with pytest.raises(ValueError, match="sim_max_abs_velocity"):
+        RobustnessManager(
+            make_cfg(velocity_response_sim_max_abs_velocity=0.1),
+            1,
+            "cpu",
+        )
 
     manager = RobustnessManager(
         make_cfg(enabled=True, velocity_response_enabled=True),
@@ -199,3 +231,42 @@ def test_invalid_configuration_and_interface_fail_fast():
     )
     with pytest.raises(ValueError, match="interface_name='velocity'"):
         manager._reset_velocity_response(make_env(interface_name="position"), torch.tensor([0]))
+
+
+def test_state_exposes_sim_parameters_and_compensated_command():
+    cfg = make_cfg(
+        enabled=True,
+        velocity_response_enabled=True,
+        velocity_response_tau_s_range=(0.155, 0.155),
+        velocity_response_gain_range=(0.86, 0.86),
+        velocity_response_bias_range=(-0.0035, -0.0035),
+    )
+    manager = RobustnessManager(cfg, 1, "cpu")
+    env = make_env()
+    initialize_command_models(manager, env, torch.tensor([0]))
+    env.control_interface.set_command_z(0.4)
+
+    manager.after_command_update(env, env.control_interface.get_command_state())
+    state = manager.get_state()
+
+    assert state["velocity_response_sim_tau_s"].item() == pytest.approx(0.139)
+    assert state["velocity_response_sim_gain"].item() == pytest.approx(1.0)
+    assert state["velocity_response_sim_bias"].item() == pytest.approx(-0.00055)
+    assert state["velocity_response_compensated_command_z"].item() == pytest.approx(
+        env.control_interface.executed_velocity[0, 2].item()
+    )
+
+
+def test_near_zero_simulator_step_response_fails_at_runtime():
+    cfg = make_cfg(
+        enabled=True,
+        velocity_response_enabled=True,
+        velocity_response_sim_tau_s=1.0e8,
+    )
+    manager = RobustnessManager(cfg, 1, "cpu")
+    env = make_env()
+    initialize_command_models(manager, env, torch.tensor([0]))
+    env.control_interface.set_command_z(0.4)
+
+    with pytest.raises(ValueError, match="near-zero"):
+        manager.after_command_update(env, env.control_interface.get_command_state())

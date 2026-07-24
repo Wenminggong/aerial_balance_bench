@@ -1,5 +1,5 @@
 env_config: environments/configs/unified_tracking_mixed.yaml
-policy_config: baselines/configs/rl_rpo_reference_preview_train.yaml
+policy_config: baselines/configs/rl_rpo_relative_reference_preview_train.yaml
 
 seed: 2025
 
@@ -16,8 +16,8 @@ training:
   checkpoint_interval: null
   wandb: true
   wandb_kwargs:
-    project: aerial_balance_bench
+    project: unified_tracking
 
 logging:
-  root_dir: logs/rl_train/unified_tracking
-  run_name: rpo_unified_tracking_reference_preview_train
+  root_dir: logs/rl_unified_tracking
+  run_name: rpo_unified_tracking_relative_reference_preview_train

@@ -69,6 +69,10 @@ class RobustnessManagerCfg:
     velocity_response_ou_mu_range: tuple[float, float] = (0.0, 0.0)
     velocity_response_noise_clip: float = 0.0
     velocity_response_max_abs_velocity: float = 0.0
+    velocity_response_sim_tau_s: float = 0.100
+    velocity_response_sim_gain: float = 1.013
+    velocity_response_sim_bias: float = -0.00056
+    velocity_response_sim_max_abs_velocity: float = 0.0
     external_disturbance_enabled: bool = False
     external_disturbance_ou_mu: float = 0.0
     external_disturbance_ou_theta_range: tuple[float, float] = (0.1, 0.3)
@@ -81,7 +85,7 @@ class RobustnessManager:
 
     This manager currently implements reset-time ball-mass variation,
     low-level controller gain variation, command-level action delay,
-    first-order velocity response, and OU-process fixed-end external
+    plant-matched velocity response, and OU-process fixed-end external
     disturbances.
     """
 
@@ -124,7 +128,13 @@ class RobustnessManager:
         self.velocity_response_nominal_z = self.velocity_response_model.nominal_z
         self.velocity_response_noise_z = self.velocity_response_model.noise_z
         self.velocity_response_executed_z = self.velocity_response_model.executed_z
+        self.velocity_response_compensated_command_z = (
+            self.velocity_response_model.compensated_command_z
+        )
         self.velocity_response_error_z = self.velocity_response_model.error_z
+        self.velocity_response_sim_tau_s = self.velocity_response_model.sim_tau_s
+        self.velocity_response_sim_gain = self.velocity_response_model.sim_gain
+        self.velocity_response_sim_bias = self.velocity_response_model.sim_bias
         self.external_disturbance_enabled = torch.full(
             (num_envs,),
             float(self._external_disturbance_active()),
@@ -228,7 +238,13 @@ class RobustnessManager:
             "velocity_response_nominal_z": self.velocity_response_nominal_z,
             "velocity_response_noise_z": self.velocity_response_noise_z,
             "velocity_response_executed_z": self.velocity_response_executed_z,
+            "velocity_response_compensated_command_z": (
+                self.velocity_response_compensated_command_z
+            ),
             "velocity_response_error_z": self.velocity_response_error_z,
+            "velocity_response_sim_tau_s": self.velocity_response_sim_tau_s,
+            "velocity_response_sim_gain": self.velocity_response_sim_gain,
+            "velocity_response_sim_bias": self.velocity_response_sim_bias,
             "external_disturbance_enabled": self.external_disturbance_enabled,
             "external_disturbance_vel_z": self.external_disturbance_vel_z[:, 0],
             "external_disturbance_ou_theta": self.external_disturbance_ou_theta[:, 0],
@@ -375,7 +391,13 @@ class RobustnessManager:
         self.velocity_response_noise_mode_id[env_ids] = float(mode_id)
 
         command = env.control_interface.get_command_state()
-        initial_z = command["executed_command_z"][env_ids].to(device=self.device, dtype=torch.float32)
+        initial_input_z = command["executed_command_z"][env_ids].to(
+            device=self.device,
+            dtype=torch.float32,
+        )
+        if not hasattr(env, "vrz"):
+            raise ValueError("Velocity response reset requires env.vrz actual velocity state.")
+        initial_z = env.vrz[env_ids].to(device=self.device, dtype=torch.float32)
         count = int(env_ids.numel())
         if active:
             tau_s = self._sample_velocity_response_parameter(
@@ -430,6 +452,22 @@ class RobustnessManager:
             noise_std=noise_std,
             ou_theta=ou_theta,
             ou_mu=ou_mu,
+            initial_input_z=initial_input_z,
+            sim_tau_s=torch.full(
+                (count,),
+                float(self.cfg.velocity_response_sim_tau_s),
+                device=self.device,
+            ),
+            sim_gain=torch.full(
+                (count,),
+                float(self.cfg.velocity_response_sim_gain),
+                device=self.device,
+            ),
+            sim_bias=torch.full(
+                (count,),
+                float(self.cfg.velocity_response_sim_bias),
+                device=self.device,
+            ),
         )
 
     def _apply_velocity_response(
@@ -445,14 +483,14 @@ class RobustnessManager:
             raise ValueError("Velocity response requires an 'executed_velocity' command state.")
 
         response_command = command["executed_velocity"].to(device=self.device, dtype=torch.float32).clone()
-        executed_z = self.velocity_response_model.step(
+        compensated_z = self.velocity_response_model.step(
             response_command[:, 2],
             step_dt,
             self.velocity_response_noise_mode,
             noise_clip=float(self.cfg.velocity_response_noise_clip),
             max_abs_velocity=float(self.cfg.velocity_response_max_abs_velocity),
         )
-        response_command[:, 2] = executed_z
+        response_command[:, 2] = compensated_z
         self.velocity_response_enabled[:] = 1.0
         self.velocity_response_noise_mode_id[:] = float(
             VelocityResponseModel.NOISE_MODE_IDS[self.velocity_response_noise_mode]
@@ -504,6 +542,22 @@ class RobustnessManager:
             value = float(getattr(self.cfg, field_name))
             if not math.isfinite(value) or value < 0.0:
                 raise ValueError(f"robustness.{field_name} must be finite and non-negative.")
+
+        sim_tau_s = float(self.cfg.velocity_response_sim_tau_s)
+        if not math.isfinite(sim_tau_s) or sim_tau_s <= 0.0:
+            raise ValueError("robustness.velocity_response_sim_tau_s must be finite and positive.")
+        sim_gain = float(self.cfg.velocity_response_sim_gain)
+        if not math.isfinite(sim_gain) or sim_gain <= 0.0:
+            raise ValueError("robustness.velocity_response_sim_gain must be finite and positive.")
+        sim_bias = float(self.cfg.velocity_response_sim_bias)
+        if not math.isfinite(sim_bias):
+            raise ValueError("robustness.velocity_response_sim_bias must be finite.")
+        sim_max_abs_velocity = float(self.cfg.velocity_response_sim_max_abs_velocity)
+        if not math.isfinite(sim_max_abs_velocity) or sim_max_abs_velocity != 0.0:
+            raise ValueError(
+                "robustness.velocity_response_sim_max_abs_velocity must be 0.0; "
+                "plant saturation inversion is not supported."
+            )
 
     def _sample_velocity_response_parameter(
         self,

@@ -20,10 +20,12 @@ TRAJECTORY_TYPE_TO_ID = {
 }
 PERIODIC_TRAJECTORY_TYPES = ("sine", "triangle", "trapezoid")
 RANDOM_TRAJECTORY_TYPES = ("random_b_spline", "random_ramp_dwell")
+B_SPLINE_SAMPLING_MODES = ("uniform", "paired_alternating_extrema")
+RAMP_DWELL_SAMPLING_MODES = ("independent", "half_cycle_mixture")
 
 
 class RandomReferenceTrajectories:
-    """Sample and evaluate finite-duration B-spline and ramp-dwell references."""
+    """Sample and evaluate B-spline and ramp-dwell references."""
 
     def __init__(
         self,
@@ -32,6 +34,8 @@ class RandomReferenceTrajectories:
         device: str | torch.device,
         beam_position_min: float,
         beam_position_max: float,
+        *,
+        reference_horizon_s: float | None = None,
     ):
         self.cfg = cfg
         self.num_envs = self._validate_positive_integer("num_envs", num_envs)
@@ -58,13 +62,34 @@ class RandomReferenceTrajectories:
                 "random_b_spline_degree must be smaller than "
                 "random_b_spline_num_control_points."
             )
-        self.b_spline_duration_s = self._validate_positive_float(
+        self.b_spline_sampling_mode = self._validate_choice(
+            "random_b_spline_sampling_mode",
+            getattr(cfg, "random_b_spline_sampling_mode", "uniform"),
+            B_SPLINE_SAMPLING_MODES,
+        )
+        self.reference_horizon_s = self._validate_optional_positive_float(
+            "reference_horizon_s",
+            reference_horizon_s,
+        )
+        self.configured_b_spline_duration_s = self._validate_positive_float(
             "random_b_spline_duration_s",
             cfg.random_b_spline_duration_s,
+        )
+        self.b_spline_duration_s = max(
+            self.configured_b_spline_duration_s,
+            self.reference_horizon_s or 0.0,
         )
         self.b_spline_position_range = self._validate_position_range(
             "random_b_spline_position_range",
             cfg.random_b_spline_position_range,
+        )
+        self.b_spline_extrema_ranges = self._validate_position_ranges(
+            "random_b_spline_extrema_ranges",
+            getattr(
+                cfg,
+                "random_b_spline_extrema_ranges",
+                ((0.10, 0.30), (0.40, 0.60)),
+            ),
         )
         self.b_spline_start_position = self._validate_position(
             "random_b_spline_start_position",
@@ -74,21 +99,32 @@ class RandomReferenceTrajectories:
             "random_b_spline_end_position",
             cfg.random_b_spline_end_position,
         )
+        self._validate_paired_b_spline_config()
 
+        self.ramp_dwell_sampling_mode = self._validate_choice(
+            "random_ramp_dwell_sampling_mode",
+            getattr(cfg, "random_ramp_dwell_sampling_mode", "independent"),
+            RAMP_DWELL_SAMPLING_MODES,
+        )
         self.ramp_dwell_num_segments = self._validate_positive_integer(
             "random_ramp_dwell_num_segments",
             cfg.random_ramp_dwell_num_segments,
         )
-        self.ramp_dwell_duration_s = self._validate_positive_float(
+        self.configured_ramp_dwell_duration_s = self._validate_positive_float(
             "random_ramp_dwell_duration_s",
             cfg.random_ramp_dwell_duration_s,
+        )
+        self.ramp_dwell_duration_s = max(
+            self.configured_ramp_dwell_duration_s,
+            self.reference_horizon_s or 0.0,
         )
         self.ramp_dwell_start_position = self._validate_position(
             "random_ramp_dwell_start_position",
             cfg.random_ramp_dwell_start_position,
         )
-        self.ramp_dwell_target_ranges = self._validate_target_ranges(
-            cfg.random_ramp_dwell_target_ranges
+        self.ramp_dwell_target_ranges = self._validate_position_ranges(
+            "random_ramp_dwell_target_ranges",
+            cfg.random_ramp_dwell_target_ranges,
         )
         self.ramp_duration_range = self._validate_duration_range(
             "random_ramp_duration_range",
@@ -100,6 +136,20 @@ class RandomReferenceTrajectories:
             cfg.random_dwell_duration_range,
             strictly_positive=False,
         )
+        self.half_cycle_duration_range = self._validate_duration_range(
+            "random_ramp_dwell_half_cycle_duration_range",
+            getattr(cfg, "random_ramp_dwell_half_cycle_duration_range", (4.0, 5.0)),
+            strictly_positive=True,
+        )
+        self.continuous_ramp_probability = self._validate_probability(
+            "random_ramp_dwell_continuous_ramp_probability",
+            getattr(cfg, "random_ramp_dwell_continuous_ramp_probability", 0.5),
+        )
+        self.ramp_fraction_range = self._validate_open_unit_range(
+            "random_ramp_dwell_ramp_fraction_range",
+            getattr(cfg, "random_ramp_dwell_ramp_fraction_range", (0.45, 0.55)),
+        )
+        self._validate_half_cycle_ramp_dwell_config()
 
         self.b_spline_control_positions = torch.full(
             (self.num_envs, self.b_spline_num_control_points),
@@ -121,6 +171,13 @@ class RandomReferenceTrajectories:
         self.ramp_start_times = torch.zeros(ramp_shape, dtype=torch.float32, device=self.device)
         self.ramp_end_times = torch.zeros_like(self.ramp_start_times)
         self.dwell_end_times = torch.zeros_like(self.ramp_start_times)
+        self.ramp_half_cycle_durations = torch.zeros_like(self.ramp_start_times)
+        self.ramp_fractions = torch.zeros_like(self.ramp_start_times)
+        self.ramp_dwell_continuous_profile = torch.zeros(
+            self.num_envs,
+            dtype=torch.bool,
+            device=self.device,
+        )
         self.ramp_dwell_final_position = torch.full(
             (self.num_envs,),
             self.ramp_dwell_start_position,
@@ -185,20 +242,30 @@ class RandomReferenceTrajectories:
         """Return JSON-serializable random-reference configuration metadata."""
         return {
             "random_b_spline": {
+                "sampling_mode": self.b_spline_sampling_mode,
                 "degree": self.b_spline_degree,
                 "num_control_points": self.b_spline_num_control_points,
-                "duration_s": self.b_spline_duration_s,
+                "duration_s": self.configured_b_spline_duration_s,
                 "position_range": list(self.b_spline_position_range),
+                "extrema_ranges": [
+                    list(value_range) for value_range in self.b_spline_extrema_ranges
+                ],
                 "start_position": self.b_spline_start_position,
                 "end_position": self.b_spline_end_position,
             },
             "random_ramp_dwell": {
+                "sampling_mode": self.ramp_dwell_sampling_mode,
                 "num_segments": self.ramp_dwell_num_segments,
-                "duration_s": self.ramp_dwell_duration_s,
+                "duration_s": self.configured_ramp_dwell_duration_s,
                 "start_position": self.ramp_dwell_start_position,
-                "target_ranges": [list(value_range) for value_range in self.ramp_dwell_target_ranges],
+                "target_ranges": [
+                    list(value_range) for value_range in self.ramp_dwell_target_ranges
+                ],
                 "ramp_duration_range": list(self.ramp_duration_range),
                 "dwell_duration_range": list(self.dwell_duration_range),
+                "half_cycle_duration_range": list(self.half_cycle_duration_range),
+                "continuous_ramp_probability": self.continuous_ramp_probability,
+                "ramp_fraction_range": list(self.ramp_fraction_range),
             },
         }
 
@@ -211,7 +278,7 @@ class RandomReferenceTrajectories:
         )
         control_positions[:, 0] = self.b_spline_start_position
         control_positions[:, -1] = self.b_spline_end_position
-        if self.b_spline_num_control_points > 2:
+        if self.b_spline_sampling_mode == "uniform" and self.b_spline_num_control_points > 2:
             low, high = self.b_spline_position_range
             control_positions[:, 1:-1] = (
                 torch.rand(
@@ -222,9 +289,32 @@ class RandomReferenceTrajectories:
                 * (high - low)
                 + low
             )
+        elif self.b_spline_sampling_mode == "paired_alternating_extrema":
+            num_blocks = (self.b_spline_num_control_points - 2) // 2
+            extrema_ranges = torch.tensor(
+                self.b_spline_extrema_ranges,
+                dtype=torch.float32,
+                device=self.device,
+            )
+            first_range_id = torch.randint(0, 2, (count, 1), device=self.device)
+            block_offsets = torch.arange(num_blocks, device=self.device).unsqueeze(0)
+            range_ids = (first_range_id + block_offsets) % 2
+            selected_ranges = extrema_ranges[range_ids]
+            block_positions = selected_ranges[..., 0] + torch.rand(
+                (count, num_blocks),
+                dtype=torch.float32,
+                device=self.device,
+            ) * (selected_ranges[..., 1] - selected_ranges[..., 0])
+            control_positions[:, 1:-1] = block_positions.repeat_interleave(2, dim=-1)
         self.b_spline_control_positions[env_ids] = control_positions
 
     def _sample_ramp_dwell(self, env_ids: torch.Tensor):
+        if self.ramp_dwell_sampling_mode == "half_cycle_mixture":
+            self._sample_half_cycle_ramp_dwell(env_ids)
+            return
+        self._sample_independent_ramp_dwell(env_ids)
+
+    def _sample_independent_ramp_dwell(self, env_ids: torch.Tensor):
         count = env_ids.numel()
         num_segments = self.ramp_dwell_num_segments
         target_ranges = torch.tensor(
@@ -254,6 +344,96 @@ class RandomReferenceTrajectories:
             count,
             num_segments,
         )
+        requested_ramp_durations, requested_dwell_durations = (
+            self._ensure_ramp_dwell_duration_coverage(
+                requested_ramp_durations,
+                requested_dwell_durations,
+            )
+        )
+        self.ramp_dwell_continuous_profile[env_ids] = False
+        self.ramp_half_cycle_durations[env_ids] = 0.0
+        self.ramp_fractions[env_ids] = 0.0
+        self._write_ramp_dwell_schedule(
+            env_ids,
+            target_positions,
+            requested_ramp_durations,
+            requested_dwell_durations,
+        )
+
+    def _sample_half_cycle_ramp_dwell(self, env_ids: torch.Tensor):
+        count = env_ids.numel()
+        num_segments = self.ramp_dwell_num_segments
+        target_ranges = torch.tensor(
+            self.ramp_dwell_target_ranges,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        first_range_id = torch.randint(0, 2, (count, 1), device=self.device)
+        segment_offsets = torch.arange(num_segments, device=self.device).unsqueeze(0)
+        range_ids = (first_range_id + segment_offsets) % 2
+        selected_ranges = target_ranges[range_ids]
+        target_positions = selected_ranges[..., 0] + torch.rand(
+            (count, num_segments),
+            dtype=torch.float32,
+            device=self.device,
+        ) * (selected_ranges[..., 1] - selected_ranges[..., 0])
+
+        continuous_profile = (
+            torch.rand(count, dtype=torch.float32, device=self.device)
+            < self.continuous_ramp_probability
+        )
+        half_cycle_durations = self._sample_matrix_range(
+            self.half_cycle_duration_range,
+            count,
+            num_segments,
+        )
+        ramp_fractions = self._sample_matrix_range(
+            self.ramp_fraction_range,
+            count,
+            num_segments,
+        )
+        half_cycle_durations = self._ensure_half_cycle_duration_coverage(
+            half_cycle_durations,
+            ramp_fractions,
+            continuous_profile,
+        )
+
+        requested_ramp_durations = ramp_fractions * half_cycle_durations
+        requested_dwell_durations = (1.0 - ramp_fractions) * half_cycle_durations
+        requested_ramp_durations[:, 0] *= 0.5
+        requested_ramp_durations = torch.where(
+            continuous_profile.unsqueeze(-1),
+            half_cycle_durations,
+            requested_ramp_durations,
+        )
+        requested_ramp_durations[continuous_profile, 0] = (
+            half_cycle_durations[continuous_profile, 0] * 0.5
+        )
+        requested_dwell_durations = torch.where(
+            continuous_profile.unsqueeze(-1),
+            torch.zeros_like(requested_dwell_durations),
+            requested_dwell_durations,
+        )
+
+        self.ramp_dwell_continuous_profile[env_ids] = continuous_profile
+        self.ramp_half_cycle_durations[env_ids] = half_cycle_durations
+        self.ramp_fractions[env_ids] = ramp_fractions
+        self._write_ramp_dwell_schedule(
+            env_ids,
+            target_positions,
+            requested_ramp_durations,
+            requested_dwell_durations,
+        )
+
+    def _write_ramp_dwell_schedule(
+        self,
+        env_ids: torch.Tensor,
+        target_positions: torch.Tensor,
+        requested_ramp_durations: torch.Tensor,
+        requested_dwell_durations: torch.Tensor,
+    ):
+        count = env_ids.numel()
+        num_segments = self.ramp_dwell_num_segments
 
         current_time = torch.zeros(count, dtype=torch.float32, device=self.device)
         current_position = torch.full(
@@ -284,6 +464,119 @@ class RandomReferenceTrajectories:
             current_position = end_position
 
         self.ramp_dwell_final_position[env_ids] = current_position
+
+    def _ensure_half_cycle_duration_coverage(
+        self,
+        half_cycle_durations: torch.Tensor,
+        ramp_fractions: torch.Tensor,
+        continuous_profile: torch.Tensor,
+    ) -> torch.Tensor:
+        """Extend half-cycle durations without leaving their configured range."""
+        duration_weights = torch.ones_like(half_cycle_durations)
+        duration_weights[:, 0] = torch.where(
+            continuous_profile,
+            torch.full_like(duration_weights[:, 0], 0.5),
+            1.0 - 0.5 * ramp_fractions[:, 0],
+        )
+        upper_bounds = torch.full_like(
+            half_cycle_durations,
+            self.half_cycle_duration_range[1],
+        )
+        available_increase = torch.clamp(upper_bounds - half_cycle_durations, min=0.0)
+        available_duration = available_increase * duration_weights
+        required_duration = torch.full(
+            (half_cycle_durations.shape[0],),
+            self.ramp_dwell_duration_s,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        scheduled_duration = (half_cycle_durations * duration_weights).sum(dim=-1)
+        deficit = torch.clamp(required_duration - scheduled_duration, min=0.0)
+        total_capacity = available_duration.sum(dim=-1)
+        tolerance = self._duration_tolerance(self.ramp_dwell_duration_s)
+        if torch.any(deficit > total_capacity + tolerance):
+            raise ValueError(
+                "random_ramp_dwell_num_segments and "
+                "random_ramp_dwell_half_cycle_duration_range cannot cover the "
+                f"required reference horizon of {self.ramp_dwell_duration_s:.6g}s."
+            )
+
+        scale = torch.where(
+            deficit > 0.0,
+            deficit / torch.clamp(total_capacity, min=torch.finfo(torch.float32).eps),
+            torch.zeros_like(deficit),
+        ).clamp(max=1.0)
+        half_cycle_durations = half_cycle_durations + available_increase * scale.unsqueeze(-1)
+
+        residual = torch.clamp(
+            required_duration - (half_cycle_durations * duration_weights).sum(dim=-1),
+            min=0.0,
+        )
+        if torch.any(residual > 0.0):
+            remaining_increase = torch.clamp(upper_bounds - half_cycle_durations, min=0.0)
+            remaining_duration = remaining_increase * duration_weights
+            capacity_index = remaining_duration.argmax(dim=-1, keepdim=True)
+            selected_weight = duration_weights.gather(1, capacity_index).squeeze(-1)
+            selected_increase = remaining_increase.gather(1, capacity_index).squeeze(-1)
+            adjustment = torch.minimum(residual / selected_weight, selected_increase)
+            half_cycle_durations.scatter_add_(1, capacity_index, adjustment.unsqueeze(-1))
+
+        scheduled_duration = (half_cycle_durations * duration_weights).sum(dim=-1)
+        if torch.any(scheduled_duration + tolerance < required_duration):
+            raise RuntimeError("Failed to extend half-cycle durations to the reference horizon.")
+        return half_cycle_durations
+
+    def _ensure_ramp_dwell_duration_coverage(
+        self,
+        ramp_durations: torch.Tensor,
+        dwell_durations: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Extend sampled segment durations within their ranges to cover the horizon."""
+        num_segments = self.ramp_dwell_num_segments
+        ramp_upper = torch.full_like(ramp_durations, self.ramp_duration_range[1])
+        dwell_upper = torch.full_like(dwell_durations, self.dwell_duration_range[1])
+        durations = torch.cat((ramp_durations, dwell_durations), dim=-1)
+        upper_bounds = torch.cat((ramp_upper, dwell_upper), dim=-1)
+        available_capacity = torch.clamp(upper_bounds - durations, min=0.0)
+
+        required_duration = torch.full(
+            (durations.shape[0],),
+            self.ramp_dwell_duration_s,
+            dtype=torch.float32,
+            device=self.device,
+        )
+        deficit = torch.clamp(required_duration - durations.sum(dim=-1), min=0.0)
+        total_capacity = available_capacity.sum(dim=-1)
+        tolerance = self._duration_tolerance(self.ramp_dwell_duration_s)
+        if torch.any(deficit > total_capacity + tolerance):
+            max_duration = self.ramp_dwell_num_segments * (
+                self.ramp_duration_range[1] + self.dwell_duration_range[1]
+            )
+            raise ValueError(
+                "random_ramp_dwell_num_segments and duration ranges can cover at most "
+                f"{max_duration:.6g}s, but the required reference horizon is "
+                f"{self.ramp_dwell_duration_s:.6g}s."
+            )
+
+        scale = torch.where(
+            deficit > 0.0,
+            deficit / torch.clamp(total_capacity, min=torch.finfo(torch.float32).eps),
+            torch.zeros_like(deficit),
+        )
+        scale = torch.clamp(scale, max=1.0)
+        durations = durations + available_capacity * scale.unsqueeze(-1)
+
+        residual = torch.clamp(required_duration - durations.sum(dim=-1), min=0.0)
+        if torch.any(residual > 0.0):
+            remaining_capacity = torch.clamp(upper_bounds - durations, min=0.0)
+            capacity_index = remaining_capacity.argmax(dim=-1, keepdim=True)
+            selected_capacity = remaining_capacity.gather(1, capacity_index).squeeze(-1)
+            adjustment = torch.minimum(residual, selected_capacity)
+            durations.scatter_add_(1, capacity_index, adjustment.unsqueeze(-1))
+
+        if torch.any(durations.sum(dim=-1) + tolerance < required_duration):
+            raise RuntimeError("Failed to extend ramp-dwell durations to the reference horizon.")
+        return durations[:, :num_segments], durations[:, num_segments:]
 
     def _evaluate_b_spline(self, t: torch.Tensor) -> torch.Tensor:
         duration = self.b_spline_duration_s
@@ -410,27 +703,83 @@ class RandomReferenceTrajectories:
             raise ValueError(f"{name} must lie within the beam position bounds.")
         return value
 
-    def _validate_target_ranges(
+    def _validate_position_ranges(
         self,
+        name: str,
         value: Sequence[Sequence[float]],
     ) -> tuple[tuple[float, float], ...]:
         if isinstance(value, (str, bytes)):
-            raise ValueError("random_ramp_dwell_target_ranges must be a sequence of ranges.")
+            raise ValueError(f"{name} must be a sequence of ranges.")
         try:
             ranges = tuple(value)
         except TypeError as exc:
-            raise ValueError(
-                "random_ramp_dwell_target_ranges must be a sequence of ranges."
-            ) from exc
+            raise ValueError(f"{name} must be a sequence of ranges.") from exc
         if not ranges:
-            raise ValueError("random_ramp_dwell_target_ranges must not be empty.")
+            raise ValueError(f"{name} must not be empty.")
         return tuple(
             self._validate_position_range(
-                f"random_ramp_dwell_target_ranges[{index}]",
+                f"{name}[{index}]",
                 value_range,
             )
             for index, value_range in enumerate(ranges)
         )
+
+    def _validate_paired_b_spline_config(self):
+        if self.b_spline_sampling_mode != "paired_alternating_extrema":
+            return
+        if self.b_spline_num_control_points < 4 or (
+            self.b_spline_num_control_points - 2
+        ) % 2 != 0:
+            raise ValueError(
+                "paired_alternating_extrema requires an even "
+                "random_b_spline_num_control_points of at least 4."
+            )
+        self._validate_two_ordered_ranges(
+            "random_b_spline_extrema_ranges",
+            self.b_spline_extrema_ranges,
+        )
+        position_low, position_high = self.b_spline_position_range
+        if any(
+            low < position_low or high > position_high
+            for low, high in self.b_spline_extrema_ranges
+        ):
+            raise ValueError(
+                "random_b_spline_extrema_ranges must lie within "
+                "random_b_spline_position_range."
+            )
+
+    def _validate_half_cycle_ramp_dwell_config(self):
+        if self.ramp_dwell_sampling_mode != "half_cycle_mixture":
+            return
+        self._validate_two_ordered_ranges(
+            "random_ramp_dwell_target_ranges",
+            self.ramp_dwell_target_ranges,
+        )
+        upper = self.half_cycle_duration_range[1]
+        continuous_capacity = (self.ramp_dwell_num_segments - 0.5) * upper
+        dwell_capacity = (
+            self.ramp_dwell_num_segments - 0.5 * self.ramp_fraction_range[1]
+        ) * upper
+        capacities = []
+        if self.continuous_ramp_probability > 0.0:
+            capacities.append(continuous_capacity)
+        if self.continuous_ramp_probability < 1.0:
+            capacities.append(dwell_capacity)
+        tolerance = self._duration_tolerance(self.ramp_dwell_duration_s)
+        if any(capacity + tolerance < self.ramp_dwell_duration_s for capacity in capacities):
+            raise ValueError(
+                "random_ramp_dwell_num_segments and "
+                "random_ramp_dwell_half_cycle_duration_range cannot cover the "
+                f"required reference horizon of {self.ramp_dwell_duration_s:.6g}s."
+            )
+
+    @staticmethod
+    def _validate_two_ordered_ranges(
+        name: str,
+        ranges: tuple[tuple[float, float], ...],
+    ):
+        if len(ranges) != 2 or ranges[0][1] >= ranges[1][0]:
+            raise ValueError(f"{name} must contain two strictly ordered, disjoint ranges.")
 
     @classmethod
     def _validate_duration_range(
@@ -467,6 +816,36 @@ class RandomReferenceTrajectories:
         return value
 
     @staticmethod
+    def _validate_probability(name: str, value: float) -> float:
+        value = float(value)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be finite and lie in [0, 1].")
+        return value
+
+    @classmethod
+    def _validate_open_unit_range(
+        cls,
+        name: str,
+        value: Sequence[float],
+    ) -> tuple[float, float]:
+        low, high = cls._validate_range(name, value)
+        if low <= 0.0 or high >= 1.0:
+            raise ValueError(f"{name} bounds must lie strictly between 0 and 1.")
+        return low, high
+
+    @staticmethod
+    def _validate_choice(name: str, value: str, choices: Sequence[str]) -> str:
+        if value not in choices:
+            raise ValueError(f"{name} must be one of {list(choices)}.")
+        return value
+
+    @classmethod
+    def _validate_optional_positive_float(cls, name: str, value: float | None) -> float | None:
+        if value is None:
+            return None
+        return cls._validate_positive_float(name, value)
+
+    @staticmethod
     def _validate_range(name: str, value: Sequence[float]) -> tuple[float, float]:
         if isinstance(value, (str, bytes)):
             raise ValueError(f"{name} must contain exactly two numeric values.")
@@ -487,3 +866,7 @@ class RandomReferenceTrajectories:
     @staticmethod
     def _endpoint_epsilon(duration: float) -> float:
         return max(1.0, duration) * torch.finfo(torch.float32).eps * 8.0
+
+    @staticmethod
+    def _duration_tolerance(duration: float) -> float:
+        return max(1.0, duration) * torch.finfo(torch.float32).eps * 16.0

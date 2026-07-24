@@ -15,18 +15,24 @@ unified_tracking_task:
   amplitude_range: [0.10, 0.25]
   period_range: [4.0, 10.0]
   phase_range: [0.0, 0.0]
+  random_b_spline_sampling_mode: paired_alternating_extrema
   random_b_spline_degree: 3
-  random_b_spline_num_control_points: 6
+  random_b_spline_num_control_points: 12
   random_b_spline_duration_s: 20.0
   random_b_spline_position_range: [0.10, 0.60]
+  random_b_spline_extrema_ranges: [[0.10, 0.30], [0.40, 0.60]]
   random_b_spline_start_position: 0.35
   random_b_spline_end_position: 0.35
-  random_ramp_dwell_num_segments: 5
+  random_ramp_dwell_sampling_mode: half_cycle_mixture
+  random_ramp_dwell_num_segments: 6
   random_ramp_dwell_duration_s: 20.0
   random_ramp_dwell_start_position: 0.35
   random_ramp_dwell_target_ranges: [[0.10, 0.30], [0.40, 0.60]]
   random_ramp_duration_range: [1.0, 3.0]
   random_dwell_duration_range: [0.0, 4.0]
+  random_ramp_dwell_half_cycle_duration_range: [4.0, 5.0]
+  random_ramp_dwell_continuous_ramp_probability: 0.5
+  random_ramp_dwell_ramp_fraction_range: [0.45, 0.55]
   constant_initialization_mode: independent_uniform
   dynamic_initialization_mode: on_reference
   fixed_initial_ball_position: 0.35
@@ -42,14 +48,14 @@ unified_tracking_task:
 
 reference_preview:
   enabled: true
-  future_steps: 5
+  future_steps: 30
 
 velocity_interface:
   max_acc: 5.0
   max_velocity: 0.0
 
 robustness:
-  enabled: false
+  enabled: true
   ball_mass_variation_enabled: false
   ball_mass_range: [0.0005, 0.0005]
   recompute_ball_inertia: true
@@ -57,15 +63,15 @@ robustness:
   controller_gain_range: [10.0, 10.0]
   action_delay_enabled: false
   delay_step: 0
-  velocity_response_enabled: false
-  velocity_response_tau_s_range: [0.0, 0.0]
-  velocity_response_gain_range: [1.0, 1.0]
-  velocity_response_bias_range: [0.0, 0.0]
-  velocity_response_noise_mode: none
-  velocity_response_noise_std_range: [0.0, 0.0]
-  velocity_response_ou_theta_range: [0.0, 0.0]
+  velocity_response_enabled: true
+  velocity_response_tau_s_range: [0.150, 0.160]
+  velocity_response_gain_range: [0.84, 0.88]
+  velocity_response_bias_range: [-0.004, -0.003]
+  velocity_response_noise_mode: ou
+  velocity_response_noise_std_range: [0.02, 0.05]
+  velocity_response_ou_theta_range: [4.0, 10.0]
   velocity_response_ou_mu_range: [0.0, 0.0]
-  velocity_response_noise_clip: 0.0
+  velocity_response_noise_clip: 0.1
   velocity_response_max_abs_velocity: 0.0
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0

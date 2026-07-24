@@ -18,8 +18,8 @@ where `c` is the center, `A` is the amplitude, `T` is the period, and `phi` is t
 | `triangle` | `1` | Piecewise-linear triangle wave in `[-1, 1]` | Continuous position with slope changes at extrema. |
 | `trapezoid` | `2` | `clip(2 triangle(x), -1, 1)` | Alternates between constant plateaus and linear ramps. |
 | `constant` | `3` | `0` | `A` is forced to zero, so `pg(t) = c`. |
-| `random_b_spline` | `4` | Clamped B-spline control polygon | Smooth finite-duration held-out reference. |
-| `random_ramp_dwell` | `5` | Random linear ramps and constant dwells | Continuous but non-smooth finite-duration held-out reference. |
+| `random_b_spline` | `4` | Clamped B-spline control polygon | Smooth, non-periodic reference with frequency-matched alternating extrema. |
+| `random_ramp_dwell` | `5` | Random linear ramps and constant dwells | Non-periodic mixture of continuous-ramp and ramp-dwell profiles. |
 
 The analytic expression above applies to the periodic and constant families.
 The two random families use per-environment buffers sampled at reset. The type
@@ -41,7 +41,7 @@ Reference velocity is the one-control-step forward finite difference used by the
 vg(t_k) = (pg(t_k + dt) - pg(t_k)) / dt
 ```
 
-`dt` is the environment control period (`decimation * sim.dt`), not the raw physics step. Consequently, constant references always have `vg = 0`; triangle, trapezoid, and ramp-dwell velocities reflect their discrete slope and corner behavior. Both finite-duration random references hold their final position after the configured duration, so their subsequent velocity is zero.
+`dt` is the environment control period (`decimation * sim.dt`), not the raw physics step. Consequently, constant references always have `vg = 0`; triangle, trapezoid, and ramp-dwell velocities reflect their discrete slope and corner behavior. Random references are generated through the full episode, configured preview horizon, and the additional forward-difference sample needed by the final preview velocity. They therefore continue naturally past the configured base duration instead of holding its terminal value inside the observable horizon.
 
 ## 2. Sampling and reset behavior
 
@@ -65,32 +65,49 @@ For a sampled constant reference, the logged center is the sampled goal and the 
 
 | Field | Default | Meaning |
 | --- | --- | --- |
+| `random_b_spline_sampling_mode` | `paired_alternating_extrema` | Frequency-matched paired extrema; use `uniform` for the legacy independent-control sampler. |
 | `random_b_spline_degree` | `3` | B-spline degree; must be at least one and smaller than the control-point count. |
-| `random_b_spline_num_control_points` | `6` | Fixed control-point count. |
-| `random_b_spline_duration_s` | `20.0` | Duration covered by the open-uniform clamped knot vector. |
-| `random_b_spline_position_range` | `[0.10, 0.60]` | Uniform range for intermediate control-point positions. |
+| `random_b_spline_num_control_points` | `12` | Fixed control-point count; the default leaves ten internal controls for five extrema pairs. |
+| `random_b_spline_duration_s` | `20.0` | Configured base duration; the knot-vector duration is extended when the required reference horizon is longer. |
+| `random_b_spline_position_range` | `[0.10, 0.60]` | Full control-point envelope and the legacy `uniform` sampling range. |
+| `random_b_spline_extrema_ranges` | `[[0.10, 0.30], [0.40, 0.60]]` | Ordered low/high ranges used by paired alternating extrema. |
 | `random_b_spline_start_position` | `0.35` | Fixed first control point and exact initial reference. |
-| `random_b_spline_end_position` | `0.35` | Fixed final control point and held terminal reference. |
+| `random_b_spline_end_position` | `0.35` | Fixed final control point at the end of the generated reference horizon. |
 
-The generator evaluates the B-spline directly in PyTorch. Because the curve is
-a convex combination of its control points, a valid control-point range keeps
-the full curve inside the beam bounds without clipping and preserves its
-smoothness.
+In the default mode, each sampled internal extremum is copied into two adjacent
+control points. The first pair randomly uses the low or high range and later
+pairs alternate ranges, while their magnitudes remain independent. With the
+20-second base duration, the resulting main reversal scale is approximately
+4--5 seconds, matching half of the 8--10 second target period without directly
+sampling a sine wave. The generator still evaluates the open-uniform clamped
+B-spline directly in PyTorch, so its convex-hull bound and smoothness are
+preserved. `uniform` retains the previous independently sampled controls.
 
 ### Random ramp-dwell fields
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `random_ramp_dwell_num_segments` | `5` | Fixed number of ramp/dwell pairs. |
-| `random_ramp_dwell_duration_s` | `20.0` | Total generated duration. |
+| `random_ramp_dwell_sampling_mode` | `half_cycle_mixture` | Frequency-matched episode profiles; use `independent` for the legacy duration sampler. |
+| `random_ramp_dwell_num_segments` | `6` | Fixed number of ramp/dwell pairs. |
+| `random_ramp_dwell_duration_s` | `20.0` | Configured base duration; generation is extended when the required reference horizon is longer. |
 | `random_ramp_dwell_start_position` | `0.35` | Initial reference position. |
-| `random_ramp_dwell_target_ranges` | `[[0.10, 0.30], [0.40, 0.60]]` | Candidate target bands; one is selected uniformly and sampled for each segment. |
-| `random_ramp_duration_range` | `[1.0, 3.0]` | Uniform ramp-duration range in seconds. |
-| `random_dwell_duration_range` | `[0.0, 4.0]` | Uniform dwell-duration range in seconds. |
+| `random_ramp_dwell_target_ranges` | `[[0.10, 0.30], [0.40, 0.60]]` | Ordered low/high target bands; the default mode alternates between them. |
+| `random_ramp_dwell_half_cycle_duration_range` | `[4.0, 5.0]` | Independently sampled interval between successive extrema. |
+| `random_ramp_dwell_continuous_ramp_probability` | `0.5` | Probability that an episode uses only continuous ramps and zero dwell. |
+| `random_ramp_dwell_ramp_fraction_range` | `[0.45, 0.55]` | Fraction of each half-cycle occupied by the ramp in a ramp-dwell episode. |
+| `random_ramp_duration_range` | `[1.0, 3.0]` | Legacy `independent` mode ramp-duration range. |
+| `random_dwell_duration_range` | `[0.0, 4.0]` | Legacy `independent` mode dwell-duration range. |
 
-Each segment starts from the previous segment's achieved position. A segment
-crossing the configured total duration is truncated consistently, and the
-reference holds the resulting final value thereafter.
+The default mode samples one profile for the whole episode. Continuous-ramp
+episodes use `ramp = half_cycle` and `dwell = 0`; ramp-dwell episodes split each
+half-cycle using the sampled ramp fraction. Because the reference begins at the
+center rather than an extremum, the first ramp is half of its normal duration.
+Targets alternate low/high, but their positions and half-cycle durations are
+sampled independently, so neither profile is periodic. Half-cycle durations are
+extended only within their configured range when required to cover the complete
+reference horizon; an impossible horizon fails fast. Six default segments cover
+at least 22 seconds. `independent` retains the previous independently sampled
+ramp/dwell durations and target bands.
 
 Setting both ends of any range to the same value makes that parameter fixed. For example, a fixed sine experiment can use:
 
@@ -155,7 +172,7 @@ Reference preview is configured independently of the task:
 ```yaml
 reference_preview:
   enabled: true
-  future_steps: 5
+  future_steps: 30
 ```
 
 With preview disabled, the raw observation is the unchanged 11-D benchmark layout:
@@ -177,13 +194,13 @@ The raw dimension is
 D_raw = 12 + 2 H
 ```
 
-Thus `H = 0` adds only current reference velocity and produces 12 dimensions; the supplied `H = 5` configs produce 22 dimensions. Offsets are consecutive control steps `0..H`. Preview continues beyond the episode horizon according to the sampled analytic reference, so the last in-episode observation has a complete, fixed-size preview.
+Thus `H = 0` adds only current reference velocity and produces 12 dimensions; the standard unified `H = 30` configs produce 72 dimensions. Offsets are consecutive control steps `0..H`. Preview continues beyond the episode horizon according to the sampled reference, so the last in-episode observation has a complete, fixed-size preview. Random-reference generation also includes one extra control step for the forward finite difference defining `vg_H`.
 
 The environment exposes the resolved `observation_fields`, `raw_observation_dim`, and `reference_preview_offsets`. Evaluation rollout archives store `observation_fields`, and visualization discovers `pg_*`/`vg_*` series from that metadata rather than assuming 11 dimensions. `resolved_run.yaml` records `raw_observation_dim`, `observation_fields`, `policy_input_dim`/`policy_input_fields` for RL, preview enabled/horizon/offsets, `trajectory_type_to_id`, configured `trajectory_types`, and `normalized_trajectory_type_weights`.
 
 ### RL adapter
 
-The new policy mode is:
+The full-preview policy mode is:
 
 ```yaml
 observation_mode: reference_preview
@@ -198,14 +215,60 @@ It produces this policy input:
 
 The adapter obtains the raw dimension and field names from the environment; the policy YAML does not duplicate `H`. Existing `legacy8` and `full11` modes accept an extended raw observation but consume only the original 11-D prefix, preserving their network dimensions and old checkpoint behavior.
 
-Preview horizon is part of the checkpoint input contract. Training and evaluation must use the same `H` and field order. A mismatched raw spec/dimension produces an explicit error instead of silently loading an incompatible network. All supplied mixed and singleton configs use `H = 5`.
+The relative, uniformly sampled policy mode is configured with:
 
-`reference_preview` policy mode cannot be combined with an active
-velocity-model state predictor (`enabled: true` with `delay_step > 0`). The
-predictor now advances the plant state and reference position for
-`legacy8`/`full11`, but it does not rebase the complete position/velocity preview
-consumed by a preview network. This unsupported combination therefore still
-fails fast.
+```yaml
+observation_mode: relative_reference_preview
+reference_preview_samples: 10
+```
+
+For `K = reference_preview_samples`, it produces:
+
+```text
+[pb - pg_0, vb - vg_0, ab, theta, omega, alpha, vrz, arz, a_prev,
+ pg_s - pg_0, pg_2s - pg_0, ..., pg_H - pg_0,
+ vg_s - vg_0, vg_2s - vg_0, ..., vg_H - vg_0]
+```
+
+where `s = H / K` in the delay-free case. `K` must be a positive integer,
+`H >= K`, and `H` must be divisible by `K`; invalid combinations fail during
+adapter construction. The standard training contract `D = 0`, `H = 30`,
+`K = 10` samples relative offsets `(3, 6, ..., 30)` and produces
+`9 + 2K = 29` inputs. Position deltas form one contiguous block followed by
+the velocity-delta block.
+
+During predictor-enabled evaluation, `H_raw` denotes the environment preview
+horizon and `D` is the active predictor/environment delay. The adapter uses
+
+```text
+H_effective = H_raw - D
+s = H_effective / K
+relative offsets = (s, 2s, ..., H_effective)
+raw source offsets = (D+s, D+2s, ..., H_raw)
+```
+
+The predictor advances the plant state and legacy `PG` field to `k + D` using
+`pg_0 ... pg_D`; it does not roll or rewrite the appended preview. The adapter
+then uses predicted `pg_D` and raw `vg_D` as its bases and reads each sampled
+`pg`/`vg` pair from its raw source offset. For `D=8`, `H_raw=38`, and `K=10`,
+the relative field names remain `delta_pg_3 ... delta_pg_30` and
+`delta_vg_3 ... delta_vg_30`, while the raw sources are offsets
+`11, 14, ..., 38`. This is exactly the same 29-D network input contract as
+delay-free `D=0`, `H=30`, `K=10` training.
+
+The checkpoint contract therefore consists of the observation mode, effective
+horizon, `K`, relative offsets, input dimension, and field order. Raw horizon
+may increase from `H_effective` to `D + H_effective` during compensated
+evaluation. A mismatched raw spec/dimension or a non-divisible effective
+horizon fails before checkpoint use. Resolved RL metadata records raw horizon,
+base offset, effective horizon, relative policy offsets, raw source offsets,
+and predictor-consumed `pg_0 ... pg_D` fields.
+
+Only `relative_reference_preview` is supported with an active predictor, and
+only in RL evaluation/deployment. The environment action delay must actually
+be enabled and have the same `delay_step` as the predictor. Full
+`reference_preview` plus predictor remains unsupported, and `rl_train.py`
+continues to reject every active predictor.
 
 ### Autoreset timing
 
@@ -247,22 +310,69 @@ initial_ball_position
 | `environments/configs/unified_tracking_sine.yaml` | Sine-reference evaluation. |
 | `environments/configs/unified_tracking_triangle.yaml` | Triangle-reference evaluation. |
 | `environments/configs/unified_tracking_trapezoid.yaml` | Trapezoid-reference evaluation. |
-| `environments/configs/unified_tracking_random_b_spline.yaml` | Held-out smooth random B-spline evaluation. |
-| `environments/configs/unified_tracking_random_ramp_dwell.yaml` | Held-out non-smooth random ramp-dwell evaluation. |
+| `environments/configs/unified_tracking_random_b_spline.yaml` | Frequency-matched, non-periodic smooth B-spline reference. |
+| `environments/configs/unified_tracking_random_ramp_dwell.yaml` | Frequency-matched, non-periodic continuous-ramp/ramp-dwell mixture. |
+| `environments/configs/unified_tracking_<family>_delay_d8_h38.yaml` | Six delay-only singleton evaluations with `D=8`, raw `H=38`, response disabled. |
 | `baselines/configs/rl_rpo_reference_preview_train.yaml` | RPO training policy using preview observations. |
 | `baselines/configs/rl_rpo_reference_preview_eval.yaml` | Deterministic preview-policy evaluation template. |
+| `baselines/configs/rl_rpo_relative_reference_preview_train.yaml` | RPO training policy using the 29-D relative sampled preview. |
+| `baselines/configs/rl_rpo_relative_reference_preview_eval.yaml` | Deterministic relative-preview evaluation template. |
+| `baselines/configs/rl_rpo_relative_reference_preview_predictor_eval.yaml` | Deterministic relative-preview evaluation with the delay predictor active. |
 | `baselines/configs/rl_unified_tracking_rpo_train.yaml` | Complete mixed RPO training run. |
 | `baselines/configs/rl_unified_tracking_rpo_eval.yaml` | Complete RL evaluation run; switch singleton env with `--env_config`. |
+| `baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml` | Complete compensated RL evaluation run for `D=8`, raw `H=38`. |
 | `baselines/configs/cpid_unified_tracking_eval.yaml` | Unchanged CPID evaluation on the mixed task; switch singleton env with `--env_config`. |
 | `baselines/configs/cpid_unified_tracking_predictor_eval.yaml` | CPID with an eight-step response-aware predictor and aligned reference preview. |
 | `baselines/configs/nffb_unified_tracking_eval.yaml` | Delay-free NFFB evaluation run; switch singleton env with `--env_config`. |
 | `baselines/configs/nffb_unified_tracking_predictor_eval.yaml` | NFFB with an eight-step response-aware predictor and `D+1` velocity preview. |
 | `baselines/configs/nffb_sine_tuning.yaml` | Resumable phase-zero sine bandwidth search, stress tests, ablation, and validation. |
 
-The mixed config retains its delay-free `H=5` layout. The deterministic
-constant/sine/triangle/trapezoid singleton configs currently use `H=10`,
-`D=8`, and the velocity-response robustness model; the dedicated CPID
-triangle predictor example keeps `H=D=8`.
+The mixed config and all six standard singleton configs use `H=30`, matching
+the supplied relative-preview RL templates with `K=10`. The deterministic
+constant/sine/triangle/trapezoid configs retain their `D=8` action-delay and
+velocity-response robustness settings. Dedicated response/predictor configs
+keep their own horizons, including the CPID triangle example with `H=D=8`.
+
+### Plant-matched velocity response
+
+The enabled velocity-response path is a feed-forward lead-lag stage rather
+than an additional first-order lag in series with the existing controller.
+The sampled range fields describe the requested final model
+
+```text
+G_real(s) = K_r / (tau_r s + 1), with output bias b_r,
+```
+
+while the fixed simulator fields describe the existing low-level response to
+be inverted:
+
+```yaml
+velocity_response_sim_tau_s: 0.139
+velocity_response_sim_gain: 1.0
+velocity_response_sim_bias: -0.00055
+velocity_response_sim_max_abs_velocity: 0.0
+```
+
+For control period `dt`, define `a_s = exp(-dt/tau_s)` and
+`a_r = exp(-dt/tau_r)`. The target is advanced first, target-output noise and
+the existing final-output limit are applied, and the stage sends
+
+```text
+u_ll[k] = (v_des[k+1] - a_s v_des[k]) / ((1-a_s) K_s) - b_s/K_s
+```
+
+to the velocity interface. Thus `velocity_response_executed_z` logs the
+desired final output and `velocity_response_compensated_command_z` logs the
+actual lead-lag command. Reset initializes the response output from the
+measured `env.vrz`; partial reset touches only selected environments. Disabled
+response remains a passthrough.
+
+This inverse does not cancel the low-level controller's pure delay, and the
+compensated command currently has no absolute-value or slew-rate limiter.
+`velocity_response_sim_max_abs_velocity` must therefore remain `0.0`.
+Controller-gain or mass randomization changes the physical plant, so one fixed
+inverse can only be approximate in those cases. The previous semantics of
+adding a standalone first-order response in series are no longer provided.
 
 The CPID unified runner preserves the legacy 11-D controller input. When its
 state predictor is inactive, CPID reacts to the current `pg` exactly as before.
@@ -275,16 +385,38 @@ used by the current model.
 An active predictor on a moving-reference task requires
 `reference_preview.enabled: true` and `reference_preview.future_steps >=
 delay_step`. A shorter preview is rejected at startup; it is never extrapolated
-or padded. Existing unified configs retain `H=5` for RL checkpoint
-compatibility. The dedicated
+or padded. Standard unified RL configs use `H=30`; the dedicated
 `environments/configs/unified_tracking_triangle_predictor.yaml` example uses
 `H=D=8`.
 
 RL evaluation uses the same future-position path in `legacy8` and `full11`
-observation modes. Combining an active predictor with
-`observation_mode=reference_preview` remains unsupported: after advancing the
-plant state to \(k+D\), that network's entire preview would also need to advance
-and therefore requires references through \(k+D+H\).
+observation modes. It also supports
+`observation_mode=relative_reference_preview` by using predictor delay `D` as
+the adapter's runtime-only base offset. The predictor consumes `pg_0 ... pg_D`
+and advances the plant; the adapter independently rebases `pg`/`vg` at `D` and
+samples the remaining horizon. `observation_mode=reference_preview` remains
+unsupported with an active predictor.
+
+The state predictor defaults to the nominal simulator response
+`0.139 / 1.0 / -0.00055`, including for the six delay-only environment configs.
+When the environment lead-lag stage is enabled, predictor parameters represent
+the combined final deterministic response. Fixed, noise-free target ranges can
+be resolved with `auto`, or supplied explicitly:
+
+```yaml
+policy_overrides:
+  state_predictor:
+    velocity_response_enabled: true
+    velocity_response_tau_s: 0.155
+    velocity_response_gain: 0.86
+    velocity_response_bias: -0.0035
+    velocity_response_max_abs_velocity: 0.0
+```
+
+Do not use `auto` for `tau/gain/bias` when enabled target ranges are randomized:
+a single deterministic predictor cannot represent per-environment samples, and
+startup validation rejects that collapse. If the environment response stage is
+disabled, `auto` instead resolves the fixed `velocity_response_sim_*` scalars.
 
 The predictor API is task-independent, so the environment preview generated
 through either `TrajectoryTrackingTask.get_reference()` or
@@ -353,6 +485,8 @@ python3 scripts/rl_train.py \
 ```
 
 For a short construction/shape check, override `--num_envs 4 --max_iterations 1`.
+Training uses `D=0`, `H=30`, and `K=10`; an active state predictor is rejected
+by the training entry point.
 
 ### Per-type RL evaluation
 
@@ -372,6 +506,28 @@ for type in constant sine triangle trapezoid; do
 done
 ```
 
+For eight-step delay compensation, switch both the run template and singleton
+family configs while reusing the same 29-D checkpoint:
+
+```bash
+CHECKPOINT=/path/to/best_agent.pt
+for type in constant sine triangle trapezoid random_b_spline random_ramp_dwell; do
+  python3 scripts/rl_policy_eval.py \
+    --config baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml \
+    --env_config "environments/configs/unified_tracking_${type}_delay_d8_h38.yaml" \
+    --checkpoint "$CHECKPOINT" \
+    --episodes 1000 \
+    --num_envs 10 \
+    --run_name "rpo_unified_${type}_predictor_d8_eval" \
+    --headless
+done
+```
+
+Startup requires `robustness.enabled=true`,
+`robustness.action_delay_enabled=true`, and matching positive predictor and
+environment `delay_step` values. A delayed environment with the predictor
+disabled is still accepted as the uncompensated comparison baseline.
+
 Use a new logging root/run name when changing metric schemas or experimental distributions. The CSV writer preserves an existing file's header, so reusing an unrelated legacy summary file could omit newly introduced columns.
 
 `scripts/summarize_rl_eval_summary.py` discovers the metric groups that are present. Unified per-type aggregates are weighted by their corresponding `<type>_completed_episodes`; target-position pooled metrics remain supported.
@@ -382,11 +538,11 @@ Use a new logging root/run name when changing metric schemas or experimental dis
 | --- | --- | --- | --- |
 | Environment | Unchanged | Supported | Optional; disabled by default |
 | Zero-action runner | Supported | Supported | Supported |
-| RL train/eval | Supported as before | Supported with velocity interface | `reference_preview`, `legacy8`, and `full11` adapters supported |
-| Existing RL checkpoints | Unchanged with their original mode/config | Not automatically transferable | Preview checkpoint requires matching `H` |
+| RL train/eval | Supported as before | Supported with velocity interface | `relative_reference_preview`, `reference_preview`, `legacy8`, and `full11` adapters supported |
+| Existing RL checkpoints | Unchanged with their original mode/config | Not automatically transferable | Full preview requires matching raw `H`; relative preview requires matching effective `H`, `K`, offsets, and fields |
 | CPID runner/policy | Supported for its existing task paths | Supported by the dedicated unified runner | Future positions consumed only by an active predictor |
 | NMPC runner/policy | Supported for its existing task paths | Not supported | Not modified |
 | NFFB runner/policy | Not exposed on legacy tasks | Supported with velocity interface | Delay-free requires `H >= 1`; delayed prediction requires `H >= D + 1` |
-| Velocity state predictor | Existing combinations unchanged; task-independent future-reference API available | `pg_0 ... pg_D` supported in CPID, NFFB, and RL legacy modes | NFFB additionally consumes `vg_D` and `vg_{D+1}`; full RL `reference_preview` mode remains unsupported |
+| Velocity state predictor | Existing combinations unchanged; task-independent future-reference API available | `pg_0 ... pg_D` supported in CPID, NFFB, RL legacy modes, and RL relative-preview evaluation | NFFB additionally consumes `vg_D` and `vg_{D+1}`; RL relative preview rebases at `D`; full RL preview remains unsupported |
 
-No existing environment YAML is migrated. `target_position`, `trajectory_tracking`, the 11-D default observation, legacy evaluator keys, and legacy checkpoint input dimensions remain intact.
+The standard unified mixed/singleton YAML files use `H=30`; the six RL delay-only configs use `D=8`, raw `H=38`, and the same effective 30-step policy horizon. Specialized response/predictor configs retain their existing horizons. `target_position`, `trajectory_tracking`, the 11-D default observation, legacy evaluator keys, existing adapter modes, and legacy checkpoint input dimensions remain intact.

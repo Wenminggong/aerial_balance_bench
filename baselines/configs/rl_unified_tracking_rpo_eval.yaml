@@ -1,5 +1,5 @@
 env_config: environments/configs/unified_tracking_constant.yaml
-policy_config: baselines/configs/rl_rpo_reference_preview_eval.yaml
+policy_config: baselines/configs/rl_rpo_relative_reference_preview_eval.yaml
 checkpoint_path: null
 
 runner:
@@ -9,5 +9,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/rl/unified_tracking
-  run_name: rpo_unified_tracking_reference_preview_eval
+  root_dir: logs/rl_unified_tracking/rpo_unified_tracking_relative_reference_preview_train_norminal_seed_2026
+  run_name: rpo_unified_tracking_relative_reference_preview_eval

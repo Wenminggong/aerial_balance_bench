@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from environments.tasks.trajectory_tracking_task import (
@@ -34,19 +35,38 @@ def test_legacy_random_pool_excludes_held_out_references():
     assert TRAJECTORY_TYPE_TO_ID["random_ramp_dwell"] not in expected_ids
 
 
-def test_legacy_task_explicit_random_references_start_and_hold_at_endpoint():
+def test_legacy_task_explicit_random_references_extend_through_preview_horizon():
     for trajectory_type in ("random_b_spline", "random_ramp_dwell"):
         torch.manual_seed(12)
-        cfg = TrajectoryTrackingTaskCfg(trajectory_type=trajectory_type)
-        task = TrajectoryTrackingTask(cfg, 4, "cpu", 0.1)
+        random_overrides = (
+            {"random_b_spline_extrema_ranges": ((0.10, 0.10), (0.60, 0.60))}
+            if trajectory_type == "random_b_spline"
+            else {
+                "random_ramp_dwell_continuous_ramp_probability": 1.0,
+                "random_ramp_dwell_half_cycle_duration_range": (4.5, 4.5),
+            }
+        )
+        cfg = TrajectoryTrackingTaskCfg(
+            trajectory_type=trajectory_type,
+            **random_overrides,
+        )
+        task = TrajectoryTrackingTask(cfg, 4, "cpu", 0.1, reference_horizon_s=20.6)
         env = FakeEnv(4)
         task.sample_reset(env, torch.arange(4))
 
         pg_zero, _ = task.get_reference(torch.zeros(4))
-        pg_end, vg_end = task.get_reference(torch.full((4,), 200))
-        pg_later, vg_later = task.get_reference(torch.full((4,), 300))
+        preview_positions = []
+        preview_velocities = []
+        base_step = torch.full((4,), 198)
+        for offset in range(6):
+            pg, vg = task.get_reference(base_step + offset)
+            preview_positions.append(pg)
+            preview_velocities.append(vg)
+        pg_preview = torch.stack(preview_positions, dim=-1)
+        vg_preview = torch.stack(preview_velocities, dim=-1)
 
         assert torch.allclose(pg_zero, torch.full((4,), 0.35), atol=1.0e-6)
-        assert torch.allclose(pg_end, pg_later)
-        assert torch.count_nonzero(vg_end) == 0
-        assert torch.count_nonzero(vg_later) == 0
+        assert not torch.allclose(pg_preview[:, 2], pg_preview[:, 3])
+        assert torch.count_nonzero(vg_preview[:, 2]) > 0
+        assert task.random_references.b_spline_duration_s == pytest.approx(20.6)
+        assert task.random_references.ramp_dwell_duration_s == pytest.approx(20.6)

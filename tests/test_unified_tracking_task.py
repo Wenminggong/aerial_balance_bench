@@ -21,9 +21,22 @@ class FakeEnv:
         self.ball_position[env_ids.cpu()] = ball_position.cpu()
 
 
-def make_task(num_envs: int = 4, **cfg_overrides) -> UnifiedTrackingTask:
+def make_task(
+    num_envs: int = 4,
+    *,
+    reference_horizon_s: float | None = None,
+    **cfg_overrides,
+) -> UnifiedTrackingTask:
     cfg = UnifiedTrackingTaskCfg(**cfg_overrides)
-    return UnifiedTrackingTask(cfg, num_envs, "cpu", 0.1, 0.0, 0.7)
+    return UnifiedTrackingTask(
+        cfg,
+        num_envs,
+        "cpu",
+        0.1,
+        0.0,
+        0.7,
+        reference_horizon_s=reference_horizon_s,
+    )
 
 
 @pytest.mark.parametrize(
@@ -60,7 +73,10 @@ def test_mixed_sampling_honors_weights_and_is_seed_reproducible():
     assert config_info["trajectory_types"] == ["constant", "sine", "triangle", "trapezoid"]
     assert config_info["normalized_trajectory_type_weights"] == [0.0, 0.0, 1.0, 0.0]
     assert config_info["random_b_spline"]["degree"] == 3
-    assert config_info["random_ramp_dwell"]["num_segments"] == 5
+    assert config_info["random_b_spline"]["sampling_mode"] == "paired_alternating_extrema"
+    assert config_info["random_b_spline"]["num_control_points"] == 12
+    assert config_info["random_ramp_dwell"]["sampling_mode"] == "half_cycle_mixture"
+    assert config_info["random_ramp_dwell"]["num_segments"] == 6
 
 
 def test_supplied_mixed_type_set_excludes_held_out_references():
@@ -150,18 +166,25 @@ def test_reference_preview_shape_offsets_and_values():
         task.get_reference_preview(steps, future_steps=-1)
 
 
-@pytest.mark.parametrize(
-    ("trajectory_type", "duration_s"),
-    (("random_b_spline", 20.0), ("random_ramp_dwell", 20.0)),
-)
-def test_random_reference_preview_and_hold_after_duration(
-    trajectory_type: str,
-    duration_s: float,
-):
+@pytest.mark.parametrize("trajectory_type", ("random_b_spline", "random_ramp_dwell"))
+def test_random_reference_preview_extends_past_configured_duration(trajectory_type: str):
     torch.manual_seed(5)
-    task = make_task(3, trajectory_types=(trajectory_type,))
+    random_overrides = (
+        {"random_b_spline_extrema_ranges": ((0.10, 0.10), (0.60, 0.60))}
+        if trajectory_type == "random_b_spline"
+        else {
+            "random_ramp_dwell_continuous_ramp_probability": 1.0,
+            "random_ramp_dwell_half_cycle_duration_range": (4.5, 4.5),
+        }
+    )
+    task = make_task(
+        3,
+        reference_horizon_s=20.6,
+        trajectory_types=(trajectory_type,),
+        **random_overrides,
+    )
     task.sample_reset(FakeEnv(3), torch.arange(3))
-    steps = torch.tensor([0, 20, 200])
+    steps = torch.full((3,), 198)
 
     pg_preview, vg_preview = task.get_reference_preview(steps, future_steps=5)
 
@@ -171,12 +194,10 @@ def test_random_reference_preview_and_hold_after_duration(
         pg, vg = task.get_reference(steps + offset)
         assert torch.allclose(pg_preview[:, offset], pg)
         assert torch.allclose(vg_preview[:, offset], vg)
-    after_duration_step = int(duration_s / task.step_dt)
-    final_pg, final_vg = task.get_reference(torch.full((3,), after_duration_step))
-    later_pg, later_vg = task.get_reference(torch.full((3,), after_duration_step + 100))
-    assert torch.allclose(final_pg, later_pg)
-    assert torch.count_nonzero(final_vg) == 0
-    assert torch.count_nonzero(later_vg) == 0
+    assert not torch.allclose(pg_preview[:, 2], pg_preview[:, 3])
+    assert torch.count_nonzero(vg_preview[:, 2]) > 0
+    assert task.random_references.b_spline_duration_s == pytest.approx(20.6)
+    assert task.random_references.ramp_dwell_duration_s == pytest.approx(20.6)
 
 
 def test_partial_reset_preserves_other_environment_parameters():
@@ -205,6 +226,9 @@ def test_partial_reset_preserves_other_environment_parameters():
         "ramp_start_times",
         "ramp_end_times",
         "dwell_end_times",
+        "ramp_half_cycle_durations",
+        "ramp_fractions",
+        "ramp_dwell_continuous_profile",
         "ramp_dwell_final_position",
     )
     random_snapshots = {
@@ -242,7 +266,7 @@ def test_partial_reset_preserves_other_environment_parameters():
             },
             "infeasible",
         ),
-        ({"random_b_spline_degree": 6}, "smaller"),
+        ({"random_b_spline_degree": 12}, "smaller"),
         ({"random_ramp_duration_range": (0.0, 1.0)}, "strictly positive"),
     ),
 )

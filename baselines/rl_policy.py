@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from .model_state_predictor import (
     VelocityModelStatePredictor,
     VelocityModelStatePredictorCfg,
     extract_reference_positions,
+    validate_reference_preview_horizon,
 )
 from .rl_models import MLPNetworkCfg, make_agent_class_and_cfg, make_models
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
@@ -28,6 +30,7 @@ class RLPolicyCfg(BasePolicyCfg):
     name: str = "rl"
     algorithm: str = "rpo"
     observation_mode: str = "legacy8"
+    reference_preview_samples: int | None = None
     checkpoint_path: str | None = None
     load_checkpoint: bool = True
     deterministic: bool = True
@@ -52,6 +55,8 @@ class RLPolicyCfg(BasePolicyCfg):
             cfg.algorithm = str(policy_data["algorithm"]).lower()
         if "observation_mode" in policy_data:
             cfg.observation_mode = str(policy_data["observation_mode"]).lower()
+        if "reference_preview_samples" in policy_data:
+            cfg.reference_preview_samples = policy_data["reference_preview_samples"]
         if "checkpoint_path" in policy_data:
             checkpoint_path = policy_data["checkpoint_path"]
             cfg.checkpoint_path = None if checkpoint_path in (None, "null", "") else str(checkpoint_path)
@@ -66,6 +71,95 @@ class RLPolicyCfg(BasePolicyCfg):
         cfg.agent = dict(policy_data.get("agent", {}))
         cfg.state_predictor = VelocityModelStatePredictorCfg.from_dict(policy_data.get("state_predictor", {}))
         return cfg
+
+
+def validate_rl_predictor_environment_contract(
+    *,
+    observation_mode: str,
+    reference_preview_samples: int | None,
+    predictor_enabled: bool,
+    predictor_delay_step: int,
+    preview_enabled: bool,
+    preview_future_steps: int,
+    robustness_enabled: bool,
+    action_delay_enabled: bool,
+    environment_delay_step: int,
+    moving_reference: bool = True,
+    context: str = "RL unified tracking",
+) -> None:
+    """Validate delayed-environment and preview alignment for RL evaluation."""
+    delay_step = int(predictor_delay_step)
+    if not predictor_enabled or delay_step <= 0:
+        return
+
+    environment_delay_step = int(environment_delay_step)
+    environment_delay_active = (
+        bool(robustness_enabled)
+        and bool(action_delay_enabled)
+        and environment_delay_step > 0
+    )
+    if not environment_delay_active:
+        raise ValueError(
+            f"{context} requires an active environment action delay when the state predictor "
+            f"is active with delay_step={delay_step}. Enable robustness.enabled and "
+            "robustness.action_delay_enabled with a positive delay_step."
+        )
+    if delay_step != environment_delay_step:
+        raise ValueError(
+            f"{context} state predictor delay_step must match robustness.delay_step; "
+            f"got predictor D={delay_step}, environment D={environment_delay_step}."
+        )
+
+    mode = str(observation_mode).lower()
+    if mode == "reference_preview":
+        raise ValueError(
+            f"{context} observation_mode='reference_preview' cannot be combined with an active "
+            "state predictor. Use observation_mode='relative_reference_preview' for aligned "
+            "preview compensation."
+        )
+    if not moving_reference and mode != "relative_reference_preview":
+        return
+
+    validate_reference_preview_horizon(
+        delay_step=delay_step,
+        preview_enabled=preview_enabled,
+        preview_future_steps=preview_future_steps,
+        context=context,
+    )
+    if mode != "relative_reference_preview":
+        return
+
+    configured_samples = reference_preview_samples
+    if configured_samples is None or isinstance(configured_samples, bool):
+        raise ValueError(
+            f"{context} relative_reference_preview requires a positive integer "
+            "reference_preview_samples=K."
+        )
+    try:
+        samples = operator.index(configured_samples)
+    except TypeError as exc:
+        raise ValueError(
+            f"{context} relative_reference_preview requires a positive integer "
+            "reference_preview_samples=K."
+        ) from exc
+    if samples <= 0:
+        raise ValueError(
+            f"{context} relative_reference_preview requires a positive integer "
+            f"reference_preview_samples=K; got K={configured_samples}."
+        )
+
+    raw_horizon = int(preview_future_steps)
+    effective_horizon = raw_horizon - delay_step
+    if effective_horizon < samples:
+        raise ValueError(
+            f"{context} requires H_effective=H_raw-D >= K; got "
+            f"H_raw={raw_horizon}, D={delay_step}, H_effective={effective_horizon}, K={samples}."
+        )
+    if effective_horizon % samples != 0:
+        raise ValueError(
+            f"{context} requires H_effective=H_raw-D to be an integer multiple of K; got "
+            f"H_raw={raw_horizon}, D={delay_step}, H_effective={effective_horizon}, K={samples}."
+        )
 
 
 class RLPolicy(BasePolicy):
@@ -92,20 +186,30 @@ class RLPolicy(BasePolicy):
             raise ValueError("RLPolicy requires a positive physical_action_limit.")
 
         self._resolve_predictor_cfg_defaults()
-        adapter_cfg = RLObservationAdapterCfg(observation_mode=cfg.observation_mode)
+        self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        observation_mode = str(cfg.observation_mode).lower()
+        reference_preview_base_offset = (
+            self.state_predictor.delay_step
+            if observation_mode == "relative_reference_preview" and self.state_predictor.active
+            else 0
+        )
+        adapter_cfg = RLObservationAdapterCfg(
+            observation_mode=cfg.observation_mode,
+            reference_preview_samples=cfg.reference_preview_samples,
+        )
         self.observation_adapter = RLObservationAdapter(
             adapter_cfg,
             num_envs,
             self.device,
             raw_observation_dim=raw_observation_dim,
             raw_observation_fields=raw_observation_fields,
+            reference_preview_base_offset=reference_preview_base_offset,
         )
-        self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
         if self.observation_mode == "reference_preview" and self.state_predictor.active:
             raise ValueError(
-                "RL observation_mode='reference_preview' cannot be combined with an active state "
-                "predictor because future-reference advancement is not implemented. Disable the "
-                "state predictor or use observation_mode='legacy8'/'full11'."
+                f"RL observation_mode='{self.observation_mode}' cannot be combined with an active "
+                "state predictor. Use observation_mode='relative_reference_preview' for aligned "
+                "preview compensation, or disable the state predictor."
             )
 
         self.normalized_action_space = spaces.Box(
@@ -154,8 +258,16 @@ class RLPolicy(BasePolicy):
                     f"Failed to load RL checkpoint for observation_mode='{self.observation_mode}', "
                     f"raw_observation_dim={self.observation_adapter.raw_observation_dim}, "
                     f"policy_input_dim={self.observation_adapter.input_dim}, "
-                    f"preview_future_steps={preview_horizon}. Check that the checkpoint was trained "
-                    "with the same observation layout."
+                    f"raw_preview_future_steps={preview_horizon}, "
+                    "reference_preview_base_offset="
+                    f"{self.observation_adapter.reference_preview_base_offset}, "
+                    "effective_preview_future_steps="
+                    f"{self.observation_adapter.effective_reference_preview_future_steps}, "
+                    f"reference_preview_samples={self.observation_adapter.reference_preview_samples}, "
+                    f"policy_preview_offsets={self.observation_adapter.preview_offsets}, "
+                    "policy_preview_source_offsets="
+                    f"{self.observation_adapter.preview_source_offsets}. Check that "
+                    "the checkpoint was trained with the same observation layout."
                 ) from exc
 
         self.timestep = 0
@@ -195,8 +307,9 @@ class RLPolicy(BasePolicy):
             raw_obs[:, :11],
             reference_positions=reference_positions,
         )
-        # Legacy/full11 networks do not consume the appended preview. It is
-        # retained here so the observation adapter keeps its raw-input contract.
+        # The predictor replaces only the legacy plant-state prefix. Appended
+        # raw references stay intact so a relative-preview adapter can rebase
+        # them from reference offset D after predicting the plant to k + D.
         if raw_obs.shape[1] > 11:
             model_obs = torch.cat((model_legacy_obs, raw_obs[:, 11:]), dim=-1)
         else:

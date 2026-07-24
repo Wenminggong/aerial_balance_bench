@@ -35,14 +35,20 @@ class TrajectoryTrackingTaskCfg:
     random_amplitude: bool = False
     random_period: bool = False
 
+    random_b_spline_sampling_mode: str = "paired_alternating_extrema"
     random_b_spline_degree: int = 3
-    random_b_spline_num_control_points: int = 6
+    random_b_spline_num_control_points: int = 12
     random_b_spline_duration_s: float = 20.0
     random_b_spline_position_range: tuple[float, float] = (0.10, 0.60)
+    random_b_spline_extrema_ranges: tuple[tuple[float, float], ...] = (
+        (0.10, 0.30),
+        (0.40, 0.60),
+    )
     random_b_spline_start_position: float = 0.35
     random_b_spline_end_position: float = 0.35
 
-    random_ramp_dwell_num_segments: int = 5
+    random_ramp_dwell_sampling_mode: str = "half_cycle_mixture"
+    random_ramp_dwell_num_segments: int = 6
     random_ramp_dwell_duration_s: float = 20.0
     random_ramp_dwell_start_position: float = 0.35
     random_ramp_dwell_target_ranges: tuple[tuple[float, float], ...] = (
@@ -51,6 +57,9 @@ class TrajectoryTrackingTaskCfg:
     )
     random_ramp_duration_range: tuple[float, float] = (1.0, 3.0)
     random_dwell_duration_range: tuple[float, float] = (0.0, 4.0)
+    random_ramp_dwell_half_cycle_duration_range: tuple[float, float] = (4.0, 5.0)
+    random_ramp_dwell_continuous_ramp_probability: float = 0.5
+    random_ramp_dwell_ramp_fraction_range: tuple[float, float] = (0.45, 0.55)
 
     position_weight: float = 5.0
     velocity_weight: float = 0.5
@@ -72,6 +81,8 @@ class TrajectoryTrackingTask:
         step_dt: float,
         beam_position_min: float = 0.0,
         beam_position_max: float = 0.70,
+        *,
+        reference_horizon_s: float | None = None,
     ):
         self.cfg = cfg
         self.num_envs = num_envs
@@ -93,6 +104,7 @@ class TrajectoryTrackingTask:
             self.device,
             beam_position_min,
             beam_position_max,
+            reference_horizon_s=reference_horizon_s,
         )
 
     def sample_reset(self, env, env_ids: Sequence[int] | torch.Tensor):
