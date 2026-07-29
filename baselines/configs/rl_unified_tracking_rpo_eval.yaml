@@ -9,5 +9,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/rl_unified_tracking/rpo_unified_tracking_relative_reference_preview_train_norminal_seed_2026
+  root_dir: logs/rl_unified_tracking/rpo_unified_tracking_relative_reference_preview_30_real_response_train_seed_1024
   run_name: rpo_unified_tracking_relative_reference_preview_eval

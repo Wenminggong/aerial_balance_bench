@@ -33,7 +33,7 @@ agent:
 
 state_predictor:
   enabled: true
-  delay_step: auto
+  delay_step: 8
   solver: rk4
   step_dt: auto
   max_acc: auto

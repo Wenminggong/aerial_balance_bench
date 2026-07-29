@@ -64,10 +64,21 @@ robustness:
   action_delay_enabled: false
   delay_step: 0
   velocity_response_enabled: true
-  velocity_response_tau_s_range: [0.150, 0.160]
-  velocity_response_gain_range: [0.84, 0.88]
-  velocity_response_bias_range: [-0.004, -0.003]
-  velocity_response_noise_mode: none
+  # # standard vel response
+  # velocity_response_tau_s_range: [0.150, 0.160]
+  # velocity_response_gain_range: [0.84, 0.88]
+  # velocity_response_bias_range: [-0.004, -0.003]
+  # velocity_response_noise_mode: none
+  # velocity_response_noise_std_range: [0.02, 0.05]
+  # velocity_response_ou_theta_range: [4.0, 10.0]
+  # velocity_response_ou_mu_range: [0.0, 0.0]
+  # velocity_response_noise_clip: 0.1
+  # velocity_response_max_abs_velocity: 0.0
+  # extended vel response
+  velocity_response_tau_s_range: [0.100, 0.210]
+  velocity_response_gain_range: [0.72, 1.0]
+  velocity_response_bias_range: [-0.01, 0.003]
+  velocity_response_noise_mode: ou
   velocity_response_noise_std_range: [0.02, 0.05]
   velocity_response_ou_theta_range: [4.0, 10.0]
   velocity_response_ou_mu_range: [0.0, 0.0]

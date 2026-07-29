@@ -233,6 +233,7 @@ def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg, policy_cfg: NFFBPolicyCfg):
         robustness_enabled=bool(env_cfg.robustness.enabled),
         action_delay_enabled=bool(env_cfg.robustness.action_delay_enabled),
         delay_step=int(env_cfg.robustness.delay_step),
+        delay_step_choices=env_cfg.robustness.delay_step_choices,
         state_predictor_enabled=bool(predictor_cfg.enabled),
         state_predictor_delay_step=int(predictor_cfg.delay_step),
     )
@@ -272,11 +273,7 @@ def _resolve_policy_cfg_from_env(policy_cfg: NFFBPolicyCfg, env_cfg: AerialBalan
         )
 
     predictor = policy_cfg.state_predictor
-    if _is_auto(predictor.delay_step):
-        if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
-            predictor.delay_step = int(env_cfg.robustness.delay_step)
-        else:
-            predictor.delay_step = 0
+    predictor.resolve_delay_step_from_robustness(env_cfg.robustness)
     if _is_auto(predictor.step_dt) or float(predictor.step_dt) <= 0.0:
         predictor.step_dt = float(step_dt)
     if _is_auto(predictor.max_acc):

@@ -1,6 +1,12 @@
 """Robustness hooks for Aerial-Balance-Bench."""
 
-__all__ = ["CommandDelayQueue", "RobustnessManager", "RobustnessManagerCfg", "VelocityResponseModel"]
+__all__ = [
+    "CommandDelayQueue",
+    "PerEnvCommandDelayQueue",
+    "RobustnessManager",
+    "RobustnessManagerCfg",
+    "VelocityResponseModel",
+]
 
 
 def __getattr__(name: str):
@@ -8,11 +14,22 @@ def __getattr__(name: str):
         from .velocity_response import VelocityResponseModel
 
         return VelocityResponseModel
-    if name in {"CommandDelayQueue", "RobustnessManager", "RobustnessManagerCfg"}:
-        from .robustness_manager import CommandDelayQueue, RobustnessManager, RobustnessManagerCfg
+    if name in {
+        "CommandDelayQueue",
+        "PerEnvCommandDelayQueue",
+        "RobustnessManager",
+        "RobustnessManagerCfg",
+    }:
+        from .robustness_manager import (
+            CommandDelayQueue,
+            PerEnvCommandDelayQueue,
+            RobustnessManager,
+            RobustnessManagerCfg,
+        )
 
         return {
             "CommandDelayQueue": CommandDelayQueue,
+            "PerEnvCommandDelayQueue": PerEnvCommandDelayQueue,
             "RobustnessManager": RobustnessManager,
             "RobustnessManagerCfg": RobustnessManagerCfg,
         }[name]

@@ -114,6 +114,79 @@ def test_default_dict_configuration_uses_nominal_sim_response():
     assert predictor.velocity_response_max_abs_velocity == 0.0
 
 
+def test_auto_delay_resolves_from_fixed_or_single_choice_environment():
+    fixed_cfg = make_cfg(delay_step="auto")
+    fixed_cfg.resolve_delay_step_from_robustness(
+        SimpleNamespace(
+            enabled=True,
+            action_delay_enabled=True,
+            delay_step=8,
+            delay_step_choices=(),
+        )
+    )
+    single_choice_cfg = make_cfg(delay_step="auto")
+    single_choice_cfg.resolve_delay_step_from_robustness(
+        SimpleNamespace(
+            enabled=True,
+            action_delay_enabled=True,
+            delay_step=99,
+            delay_step_choices=(5, 5),
+        )
+    )
+
+    assert fixed_cfg.delay_step == 8
+    assert single_choice_cfg.delay_step == 5
+
+
+def test_auto_delay_requires_explicit_nominal_horizon_for_random_environment():
+    cfg = make_cfg(delay_step="auto")
+
+    with pytest.raises(ValueError, match="explicit fixed nominal delay_step"):
+        cfg.resolve_delay_step_from_robustness(
+            SimpleNamespace(
+                enabled=True,
+                action_delay_enabled=True,
+                delay_step=99,
+                delay_step_choices=(0, 4, 8),
+            )
+        )
+
+
+def test_explicit_predictor_delay_is_preserved_for_random_environment():
+    cfg = make_cfg(delay_step=6)
+
+    cfg.resolve_delay_step_from_robustness(
+        SimpleNamespace(
+            enabled=True,
+            action_delay_enabled=True,
+            delay_step=99,
+            delay_step_choices=(0, 4, 8),
+        )
+    )
+
+    assert cfg.delay_step == 6
+
+
+def test_disabled_predictor_resolves_auto_delay_to_zero():
+    cfg = make_cfg(enabled=False, delay_step="auto")
+
+    cfg.resolve_delay_step_from_robustness(
+        SimpleNamespace(
+            enabled=True,
+            action_delay_enabled=True,
+            delay_step=99,
+            delay_step_choices=(0, 4, 8),
+        )
+    )
+
+    assert cfg.delay_step == 0
+
+
+def test_predictor_rejects_negative_delay_step():
+    with pytest.raises(ValueError, match="delay_step >= 0"):
+        VelocityModelStatePredictor(make_cfg(delay_step=-1), 1, "cpu")
+
+
 def test_missing_reference_preview_preserves_constant_goal_prediction():
     implicit_hold = VelocityModelStatePredictor(make_cfg(), 2, "cpu")
     explicit_hold = VelocityModelStatePredictor(make_cfg(), 2, "cpu")

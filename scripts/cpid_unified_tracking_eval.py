@@ -305,11 +305,7 @@ def _validate_env_cfg(env_cfg: AerialBalanceEnvCfg):
 
 def _resolve_predictor_cfg_from_env(policy_cfg: CPIDPolicyCfg, env_cfg: AerialBalanceEnvCfg, step_dt: float):
     predictor_cfg = policy_cfg.state_predictor
-    if _is_auto(predictor_cfg.delay_step):
-        if env_cfg.robustness.enabled and env_cfg.robustness.action_delay_enabled:
-            predictor_cfg.delay_step = int(env_cfg.robustness.delay_step)
-        else:
-            predictor_cfg.delay_step = 0
+    predictor_cfg.resolve_delay_step_from_robustness(env_cfg.robustness)
     if _is_auto(predictor_cfg.step_dt) or float(predictor_cfg.step_dt) <= 0.0:
         predictor_cfg.step_dt = float(step_dt)
     if _is_auto(predictor_cfg.max_acc):

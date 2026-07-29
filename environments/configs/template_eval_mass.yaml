@@ -29,6 +29,7 @@ robustness:
   controller_gain_range: [4.0, 8.0]
   action_delay_enabled: true
   delay_step: 15
+  delay_step_choices: []
   velocity_response_enabled: false
   velocity_response_tau_s_range: [0.0, 0.0]
   velocity_response_gain_range: [1.0, 1.0]

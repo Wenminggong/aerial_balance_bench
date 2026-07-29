@@ -13,7 +13,7 @@ unified_tracking_task:
   constant_goal_range: [0.10, 0.60]
   dynamic_center_range: [0.3, 0.4]
   amplitude_range: [0.10, 0.25]
-  period_range: [8.0, 10.0]
+  period_range: [4.0, 8.0]
   phase_range: [0.0, 0.0]
   constant_initialization_mode: independent_uniform
   dynamic_initialization_mode: on_reference
@@ -30,7 +30,7 @@ unified_tracking_task:
 
 reference_preview:
   enabled: true
-  future_steps: 30
+  future_steps: 38
 
 velocity_interface:
   max_acc: 5.0
@@ -43,18 +43,33 @@ robustness:
   recompute_ball_inertia: true
   controller_gain_variation_enabled: false
   controller_gain_range: [10.0, 10.0]
-  action_delay_enabled: false
+  action_delay_enabled: true
   delay_step: 8
   velocity_response_enabled: true
-  velocity_response_tau_s_range: [0.150, 0.160]
-  velocity_response_gain_range: [0.84, 0.88]
-  velocity_response_bias_range: [-0.004, -0.003]
+  # # standard vel response
+  # velocity_response_tau_s_range: [0.150, 0.160]
+  # velocity_response_gain_range: [0.84, 0.88]
+  # velocity_response_bias_range: [-0.004, -0.003]
+  # velocity_response_noise_mode: none
+  # velocity_response_noise_std_range: [0.02, 0.05]
+  # velocity_response_ou_theta_range: [4.0, 10.0]
+  # velocity_response_ou_mu_range: [0.0, 0.0]
+  # velocity_response_noise_clip: 0.1
+  # velocity_response_max_abs_velocity: 0.0
+  # extended vel response
+  velocity_response_tau_s_range: [0.100, 0.210]
+  velocity_response_gain_range: [0.72, 1.0]
+  velocity_response_bias_range: [-0.01, 0.003]
   velocity_response_noise_mode: ou
   velocity_response_noise_std_range: [0.02, 0.05]
   velocity_response_ou_theta_range: [4.0, 10.0]
   velocity_response_ou_mu_range: [0.0, 0.0]
   velocity_response_noise_clip: 0.1
   velocity_response_max_abs_velocity: 0.0
+  velocity_response_sim_tau_s: 0.1000
+  velocity_response_sim_gain: 1.0127
+  velocity_response_sim_bias: -0.000564
+  velocity_response_sim_max_abs_velocity: 0.0
   external_disturbance_enabled: false
   external_disturbance_ou_mu: 0.0
   external_disturbance_ou_theta_range: [0.1, 0.3]

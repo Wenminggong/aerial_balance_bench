@@ -1,0 +1,69 @@
+base_run_config: baselines/configs/nffb_unified_tracking_eval.yaml
+base_env_config: environments/configs/unified_tracking_mixed.yaml
+base_policy_config: baselines/configs/nffb.yaml
+sine_policy_config: baselines/configs/nffb_sine_phase0_acc5.yaml
+
+output_root: logs/nffb/mixed_tuning
+session_name: coarse_v1_no_comp
+output_policy_name: nffb_unified_mixed_coarse_no_comp
+output_policy_config: baselines/configs/nffb_unified_mixed_coarse_no_comp.yaml
+
+required_types: [constant, random_b_spline, random_ramp_dwell]
+
+# Keep the nominal response model explicit for diagnostics and future predictor
+# use, but disable NFFB's response inverse throughout this search.
+policy_defaults:
+  state_predictor:
+    enabled: false
+    delay_step: 0
+    step_dt: auto
+    max_acc: auto
+    max_velocity: auto
+    velocity_response_enabled: true
+    velocity_response_tau_s: 0.155
+    velocity_response_gain: 0.86
+    velocity_response_bias: -0.0035
+    velocity_response_max_abs_velocity: auto
+  velocity_response_compensation:
+    enabled: false
+    parameter_source: state_predictor
+
+screen:
+  seed: 666
+  num_envs: 48
+  episodes: 48
+  min_episodes_per_type: 8
+
+search:
+  filter_inner_pairs:
+    - [6.0, 10.0]
+    - [8.0, 12.0]
+    - [10.0, 16.0]
+    - [12.0, 20.0]
+    - [10.0, 8.0]
+    - [12.0, 8.0]
+    - [14.0, 6.0]
+  outer_pairs:
+    - [0.8, 1.0]
+    - [1.0, 1.0]
+    - [1.2, 1.0]
+    - [1.35, 1.0]
+    - [1.2, 1.2]
+    - [1.35, 1.2]
+  integral_bias_threshold: 0.01
+  integral_poles: [0.05, 0.10]
+  recovery_perturbations:
+    - {field: outer_omega, scale: 0.85}
+    - {field: outer_omega, scale: 1.15}
+    - {field: filter_omega, scale: 0.85}
+    - {field: k_theta, scale: 0.85}
+
+validation:
+  seed: 667
+  num_envs: 192
+  episodes: 192
+  min_episodes_per_type: 20
+
+acceptance:
+  full_saturation_rate: 0.05
+  tail_saturation_rate: 0.01

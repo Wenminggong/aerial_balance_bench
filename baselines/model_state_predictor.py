@@ -118,6 +118,35 @@ class VelocityModelStatePredictorCfg:
                 setattr(cfg, key, value)
         return cfg
 
+    def resolve_delay_step_from_robustness(self, robustness_cfg) -> None:
+        """Resolve an ``auto`` delay to a fixed nominal predictor horizon."""
+        if not _is_auto(self.delay_step):
+            return
+        if not self.enabled:
+            self.delay_step = 0
+            return
+
+        delay_active = bool(
+            getattr(robustness_cfg, "enabled", False)
+            and getattr(robustness_cfg, "action_delay_enabled", False)
+        )
+        if not delay_active:
+            self.delay_step = 0
+            return
+
+        raw_choices = getattr(robustness_cfg, "delay_step_choices", ())
+        choices = tuple(int(value) for value in (raw_choices or ()))
+        unique_choices = set(choices)
+        if len(unique_choices) > 1:
+            raise ValueError(
+                "VelocityModelStatePredictorCfg.delay_step='auto' cannot resolve a per-environment "
+                "random action delay. Configure an explicit fixed nominal delay_step for the predictor."
+            )
+        if unique_choices:
+            self.delay_step = unique_choices.pop()
+            return
+        self.delay_step = int(getattr(robustness_cfg, "delay_step", 0))
+
     def resolve_velocity_response_from_robustness(self, robustness_cfg) -> None:
         """Resolve ``auto`` as the final response or nominal simulator model."""
         response_active = bool(
@@ -213,6 +242,8 @@ class VelocityModelStatePredictor:
 
         if self.step_dt <= 0.0:
             raise ValueError("VelocityModelStatePredictor requires step_dt > 0.")
+        if self.delay_step < 0:
+            raise ValueError("VelocityModelStatePredictor requires delay_step >= 0.")
         if self.max_acc <= 0.0:
             raise ValueError("VelocityModelStatePredictor requires max_acc > 0.")
         if not math.isfinite(self.velocity_response_tau_s) or self.velocity_response_tau_s < 0.0:

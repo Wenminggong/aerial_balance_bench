@@ -30,6 +30,7 @@ robustness:
   action_delay_enabled: true
   # The RL fit gives L=0.120405 s=7.224 steps at 60 Hz; use the nearest supported integer delay.
   delay_step: 8
+  delay_step_choices: []
   velocity_response_enabled: true
   velocity_response_tau_s_range: [0.1395216706, 0.1395216706]
   velocity_response_gain_range: [0.9135615968, 0.9135615968]

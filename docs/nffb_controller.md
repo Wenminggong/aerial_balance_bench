@@ -20,8 +20,10 @@ NFFB requires:
 - `interface_name: velocity`;
 - `reference_preview.enabled: true`;
 - in delay-free mode, `reference_preview.future_steps >= 1`;
-- with an action delay of `D > 0`, an active predictor with the same
-  `delay_step` and `reference_preview.future_steps >= D + 1`.
+- with a fixed action delay of `D > 0`, an active predictor with the same
+  `delay_step` and `reference_preview.future_steps >= D + 1`;
+- with random `delay_step_choices`, an active predictor with an explicitly
+  configured fixed nominal `D` and `reference_preview.future_steps >= D + 1`.
 
 The controller leaves the legacy observation prefix unchanged:
 
@@ -414,6 +416,198 @@ Analyze an existing NFFB rollout without starting Isaac Sim:
 python scripts/tune_nffb_sine.py \
   --analyze-run logs/nffb/unified_tracking/<run_name>
 ```
+
+## Mixed-reference coarse search
+
+`scripts/tune_nffb_mixed.py` reuses the existing NFFB evaluator and rollout
+analysis for the trajectory families selected by
+`environments/configs/unified_tracking_mixed.yaml`. The tuning script does not
+generate a replacement environment config: it only overrides the evaluator
+seed, parallel environment count, episode target, and candidate policy gains.
+Consequently the task distribution, episode duration, preview horizon,
+velocity-interface limits, and robustness settings always come from the
+checked-in environment YAML.
+
+The supplied coarse-search config selects the current mixed families:
+
+```text
+constant, random_b_spline, random_ramp_dwell
+```
+
+The environment samples its final response from non-degenerate `tau/gain/bias`
+ranges. Predictor `auto` values therefore cannot be resolved safely. The
+current workflow keeps delay prediction and the NFFB response inverse disabled.
+It leaves the response model enabled and records the range midpoints explicitly
+for diagnostics and future predictor use:
+
+```text
+tau = 0.155 s, gain = 0.86, bias = -0.0035
+```
+
+Screening uses `seed=666` with 48 parallel one-episode environments. It starts
+from the generic and sine-tuned policies, performs a small staged
+filter/inner-loop and outer-loop search, conditionally checks slow integral
+poles for constant-reference bias, and permits at most four local recovery
+perturbations. The top three candidates and both baselines are evaluated with
+the single independent validation seed `667` using 192 parallel episodes.
+
+Run or resume the complete search:
+
+```bash
+conda run -n isaac-sim python scripts/tune_nffb_mixed.py --stage all
+```
+
+Generate and inspect every fixed trial command without launching Isaac Sim:
+
+```bash
+python3 scripts/tune_nffb_mixed.py --stage all --dry-run
+```
+
+The mixed analyzer records trajectory IDs/names per episode and reports global
+and per-family absolute MAE/RMSE/MAXE, signed bias, boundary/termination state,
+and saturation rates. A candidate must cover every configured family, avoid
+non-finite/terminated/boundary episodes, keep full-run saturation at or below
+5%, and keep final-quarter saturation at or below 1%. Feasible candidates are
+ranked by worst-family P95 RMSE, then global RMSE and peak error. This is a
+coarse feasibility search, not an optimal or near-optimal parameter claim.
+
+The session writes `leaderboard.csv`, per-run `episode_metrics.csv` and
+`type_metrics.yaml`, `screen_selection.yaml`, and `final_selection.yaml` under
+`logs/nffb/mixed_tuning/coarse_v1_no_comp/`. A passing validation also writes
+the standalone policy
+`baselines/configs/nffb_unified_mixed_coarse_no_comp.yaml`, with
+velocity-response compensation disabled.
+
+### No-compensation coarse-v1 result
+
+The no-compensation search completed all 20 screening trials and five
+independent validation trials. The validation used the current 10-second mixed
+environment, `seed=667`, and 192 parallel episodes. No candidate passed every
+safety gate, so the workflow deliberately did not create
+`baselines/configs/nffb_unified_mixed_coarse_no_comp.yaml`.
+
+The safety-ranked provisional candidate used:
+
+```text
+omega_o = 0.68 rad/s, zeta_o = 1.0, alpha = 0
+omega_f = 14.0 rad/s, zeta_f = 1.0
+k_theta = 6.0 1/s, omega_max = 0.5 rad/s
+```
+
+Its response inverse was disabled. The validation result was:
+
+| Metric | Provisional | Generic | Sine-tuned |
+| --- | ---: | ---: | ---: |
+| Completed episodes | 192 | 192 | 192 |
+| Terminations | 0 | 0 | 1 |
+| Safe-margin violations | 0 | 16 | 2 |
+| Mean RMSE | 0.06814 m | 0.07417 m | 0.03926 m |
+| Worst-family P95 RMSE | 0.18332 m | 0.17981 m | 0.13775 m |
+| Full-run maximum saturation | 0.78% | 0.17% | 2.16% |
+| Final-quarter maximum saturation | 1.61% | 0.44% | 3.77% |
+
+The provisional candidate covered 62 constant, 59 random-B-spline, and 71
+random-ramp-dwell episodes. Relative to the generic policy, it improved global
+mean RMSE by about 8.1%, random-B-spline mean RMSE by 9.3%, and random-ramp-
+dwell mean RMSE by 19.6%; constant mean RMSE was about 3.0% worse. It passed
+coverage, non-finite, termination, boundary, and full-run saturation checks,
+but failed the 1% final-quarter saturation gate. Treat
+`logs/nffb/mixed_tuning/coarse_v1_no_comp/final_selection.yaml` as a negative
+coarse-search report, not as a deployable selected policy.
+
+### No-compensation grid-v1 result
+
+The local grid used the coarse result as its center and evaluated the Cartesian
+product below while holding `omega_f=14`, both damping ratios at 1.0,
+`omega_max=0.5`, and acceleration feedforward enabled:
+
+```text
+omega_o = [0.55, 0.68, 0.80] rad/s
+k_theta = [4.5, 5.25, 6.0] 1/s
+alpha = [0.00, 0.05, 0.10]
+```
+
+Run or resume the 27-point search with:
+
+```bash
+conda run -n isaac-sim python scripts/tune_nffb_mixed.py \
+  --config baselines/configs/nffb_mixed_grid_tuning.yaml \
+  --stage all
+```
+
+All candidates used the same independent `seed=668`, 500 parallel environments,
+and 500 episodes, for a total of 13,500 evaluated episodes. Each candidate
+covered 181 constant, 164 random-B-spline, and 155 random-ramp-dwell episodes.
+All 27 candidates had zero termination, boundary, and non-finite events, met
+the per-family coverage requirement, and stayed below the 5% full-run
+saturation threshold. All 27 failed only the 1% final-quarter saturation gate;
+observed tail saturation ranged from 1.338% to 1.578%.
+
+The lexicographic safety winner, the initial center, and the lowest-error grid
+point were:
+
+| Metric | Safety-ranked best | Initial center | Lowest-error point |
+| --- | ---: | ---: | ---: |
+| `omega_o / k_theta / alpha` | 0.55 / 4.5 / 0.10 | 0.68 / 6.0 / 0.00 | 0.80 / 6.0 / 0.10 |
+| Mean RMSE | 0.07191 m | 0.06677 m | 0.05305 m |
+| Worst-family P95 RMSE | 0.16433 m | 0.16558 m | 0.14169 m |
+| Full-run maximum saturation | 0.565% | 0.644% | 0.826% |
+| Final-quarter maximum saturation | 1.338% | 1.475% | 1.578% |
+| Terminations / safe-margin violations | 0 / 0 | 0 / 0 | 0 / 0 |
+| Strict acceptance | FAIL | FAIL | FAIL |
+
+Relative to the initial center, the safety winner reduced final-quarter
+saturation by about 9.3% and improved worst-family P95 RMSE by about 0.8%, but
+its global mean RMSE was 7.7% worse. Its constant mean RMSE improved by 0.6%,
+while random-B-spline and random-ramp-dwell mean RMSE worsened by 9.5% and
+20.9%. The lowest-error point improved global mean RMSE by about 20.6%, but had
+the largest tail saturation in the grid.
+
+Every trial config, stdout log, rollout, per-episode/per-family metrics, and
+leaderboard is stored under
+`logs/nffb/mixed_tuning/grid_v1_no_comp_seed668/`. `best_selection.yaml` records
+the failed acceptance checks and comparison with the center;
+`best_observed_policy.yaml` is always written for reproducibility. Because this
+is a single-seed local search and no point passed all gates, that policy is not
+promoted to `baselines/configs/` and should not be described as a validated
+unified controller.
+
+### Earlier compensation-enabled coarse-v1 result
+
+The completed single-seed validation used the current 10-second mixed
+environment, `seed=667`, and 192 parallel episodes. No candidate passed every
+safety gate, so the workflow deliberately did not create
+`baselines/configs/nffb_unified_mixed_coarse.yaml`.
+
+The safety-ranked provisional candidate retained the generic filter/inner
+gains and used:
+
+```text
+omega_o = 0.85 rad/s, zeta_o = 1.0, alpha = 0
+omega_f = 2.5 rad/s, zeta_f = 1.0
+k_theta = 4.0 1/s, omega_max = 0.5 rad/s
+```
+
+Its response inverse remained enabled with the nominal midpoint
+`0.155 / 0.86 / -0.0035`. The validation result was:
+
+| Metric | Provisional | Generic | Sine-tuned |
+| --- | ---: | ---: | ---: |
+| Completed episodes | 192 | 192 | 192 |
+| Terminations | 0 | 0 | 192 |
+| Safe-margin violations | 2 | 5 | 121 |
+| Mean RMSE | 0.06358 m | 0.06106 m | 0.14793 m |
+| Worst-family P95 RMSE | 0.17546 m | 0.16736 m | 0.37462 m |
+| Full-run maximum saturation | 2.78% | 2.72% | 97.61% |
+| Final-quarter maximum saturation | 6.02% | 5.99% | 99.74% |
+
+The provisional candidate covered 62 constant, 59 random-B-spline, and 71
+random-ramp-dwell episodes. It is substantially safer than the sine-specific
+policy and reduces its mean RMSE by about 57%, but it does not improve generic
+tracking error and fails both the zero-safe-margin-violation and 1% tail-
+saturation requirements. Treat `final_selection.yaml` as a negative coarse-
+search report, not as a deployable selected policy. This result motivated the
+independent no-compensation rerun above.
 
 ## Evaluation
 

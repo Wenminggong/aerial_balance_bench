@@ -47,6 +47,62 @@ class CommandDelayQueue:
         return delayed_command
 
 
+class PerEnvCommandDelayQueue:
+    """Command delay queue with independently sampled delays for each environment."""
+
+    def __init__(
+        self,
+        max_delay_step: int,
+        num_envs: int,
+        command_dim: int,
+        device: torch.device,
+        dtype: torch.dtype = torch.float32,
+    ):
+        if max_delay_step < 0:
+            raise ValueError("PerEnvCommandDelayQueue requires max_delay_step >= 0.")
+        self.max_delay_step = int(max_delay_step)
+        self.num_envs = int(num_envs)
+        self.command_dim = int(command_dim)
+        self.device = device
+        self.dtype = dtype
+        self.buffer_length = self.max_delay_step + 1
+        self.buffer = torch.zeros(
+            (self.buffer_length, self.num_envs, self.command_dim),
+            device=device,
+            dtype=dtype,
+        )
+        self.write_index = -1
+        self.env_indices = torch.arange(self.num_envs, dtype=torch.long, device=device)
+
+    def reset(self, env_ids: Sequence[int] | torch.Tensor, initial_command: torch.Tensor):
+        """Fill selected environment histories with the current neutral command."""
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+        initial_command = initial_command.to(device=self.device, dtype=self.dtype)
+        self.buffer[:, env_ids] = initial_command[env_ids].unsqueeze(0)
+
+    def step(self, command: torch.Tensor, delay_steps: torch.Tensor) -> torch.Tensor:
+        """Enqueue the current command and return each environment's delayed command."""
+        command = command.to(device=self.device, dtype=self.dtype)
+        delay_steps = delay_steps.to(device=self.device, dtype=torch.long)
+        if command.shape != (self.num_envs, self.command_dim):
+            raise ValueError(
+                "PerEnvCommandDelayQueue expected command shape "
+                f"({self.num_envs}, {self.command_dim}), got {tuple(command.shape)}."
+            )
+        if delay_steps.shape != (self.num_envs,):
+            raise ValueError(
+                f"PerEnvCommandDelayQueue expected delay_steps shape ({self.num_envs},), "
+                f"got {tuple(delay_steps.shape)}."
+            )
+        if torch.any(delay_steps < 0) or torch.any(delay_steps > self.max_delay_step):
+            raise ValueError("PerEnvCommandDelayQueue delay_steps must be within [0, max_delay_step].")
+
+        self.write_index = (self.write_index + 1) % self.buffer_length
+        self.buffer[self.write_index] = command.clone()
+        read_indices = (self.write_index - delay_steps) % self.buffer_length
+        return self.buffer[read_indices, self.env_indices].clone()
+
+
 @configclass
 class RobustnessManagerCfg:
     """Configuration for benchmark robustness tests."""
@@ -59,6 +115,7 @@ class RobustnessManagerCfg:
     controller_gain_range: tuple[float, float] = (10.0, 10.0)
     action_delay_enabled: bool = False
     delay_step: int = 0
+    delay_step_choices: tuple[int, ...] = ()
     velocity_response_enabled: bool = False
     velocity_response_tau_s_range: tuple[float, float] = (0.0, 0.0)
     velocity_response_gain_range: tuple[float, float] = (1.0, 1.0)
@@ -99,8 +156,21 @@ class RobustnessManager:
         self.velocity_gain = torch.full((num_envs,), float("nan"), device=self.device)
         self.attitude_gain = torch.full((num_envs,), float("nan"), device=self.device)
         self.delay_queue: CommandDelayQueue | None = None
-        self.action_delay_enabled = torch.full((num_envs,), float(self._action_delay_active()), device=self.device)
-        self.delay_step = torch.full((num_envs,), float(max(int(cfg.delay_step), 0)), device=self.device)
+        self.per_env_delay_queue: PerEnvCommandDelayQueue | None = None
+        self.delay_step_choices = self._validate_delay_step_choices(cfg.delay_step_choices)
+        initial_delay = self._initial_delay_step()
+        self.sampled_delay_step = torch.full(
+            (num_envs,),
+            initial_delay,
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.action_delay_enabled = torch.full(
+            (num_envs,),
+            float(self._action_delay_active() and initial_delay > 0),
+            device=self.device,
+        )
+        self.delay_step = self.sampled_delay_step.to(dtype=torch.float32)
         self.delayed_command_z = torch.full((num_envs,), float("nan"), device=self.device)
         self.velocity_response_noise_mode = VelocityResponseModel.normalize_noise_mode(
             cfg.velocity_response_noise_mode
@@ -176,8 +246,15 @@ class RobustnessManager:
         command_state = command
         if self._action_delay_active():
             current_command = env.control_interface.get_delay_command()
-            self._ensure_delay_queue(current_command)
-            delayed_command = self.delay_queue.step(current_command)
+            if self._random_action_delay_enabled():
+                self._ensure_per_env_delay_queue(current_command)
+                delayed_command = self.per_env_delay_queue.step(
+                    current_command,
+                    self.sampled_delay_step,
+                )
+            else:
+                self._ensure_delay_queue(current_command)
+                delayed_command = self.delay_queue.step(current_command)
             env.control_interface.set_executed_delay_command(delayed_command)
             command_state = env.control_interface.get_command_state()
 
@@ -333,11 +410,20 @@ class RobustnessManager:
         getattr(self, log_name)[env_ids] = values
 
     def _action_delay_active(self) -> bool:
-        return bool(self.cfg.enabled and self.cfg.action_delay_enabled and int(self.cfg.delay_step) > 0)
+        return bool(
+            self.cfg.enabled
+            and self.cfg.action_delay_enabled
+            and self._max_configured_action_delay_step() > 0
+        )
 
     def _reset_action_delay(self, env, env_ids: torch.Tensor):
-        self.action_delay_enabled[env_ids] = float(self._action_delay_active())
-        self.delay_step[env_ids] = float(max(int(self.cfg.delay_step), 0))
+        sampled_delay_step = self._sample_action_delay_steps(env_ids)
+        self.sampled_delay_step[env_ids] = sampled_delay_step
+        if self._action_delay_active():
+            self.action_delay_enabled[env_ids] = (sampled_delay_step > 0).to(dtype=torch.float32)
+        else:
+            self.action_delay_enabled[env_ids] = 0.0
+        self.delay_step[env_ids] = sampled_delay_step.to(dtype=torch.float32)
 
         command = env.control_interface.get_command_state()
         if not self._action_delay_active():
@@ -348,8 +434,12 @@ class RobustnessManager:
             return
 
         current_command = env.control_interface.get_delay_command()
-        self._ensure_delay_queue(current_command)
-        self.delay_queue.reset(env_ids, current_command)
+        if self._random_action_delay_enabled():
+            self._ensure_per_env_delay_queue(current_command)
+            self.per_env_delay_queue.reset(env_ids, current_command)
+        else:
+            self._ensure_delay_queue(current_command)
+            self.delay_queue.reset(env_ids, current_command)
         env.control_interface.set_executed_delay_command(current_command)
         command = env.control_interface.get_command_state()
         self.delayed_command_z[env_ids] = command["executed_command_z"][env_ids].to(
@@ -373,10 +463,87 @@ class RobustnessManager:
                 dtype=command.dtype,
             )
 
+    def _ensure_per_env_delay_queue(self, command: torch.Tensor):
+        max_delay_step = self._max_configured_action_delay_step()
+        command_dim = int(command.shape[-1])
+        if (
+            self.per_env_delay_queue is None
+            or self.per_env_delay_queue.max_delay_step != max_delay_step
+            or self.per_env_delay_queue.command_dim != command_dim
+        ):
+            self.per_env_delay_queue = PerEnvCommandDelayQueue(
+                max_delay_step=max_delay_step,
+                num_envs=self.num_envs,
+                command_dim=command_dim,
+                device=self.device,
+                dtype=command.dtype,
+            )
+            env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+            self.per_env_delay_queue.reset(env_ids, command)
+
     def _sync_delayed_command_z(self, command: dict[str, torch.Tensor]):
-        self.action_delay_enabled[:] = float(self._action_delay_active())
-        self.delay_step[:] = float(max(int(self.cfg.delay_step), 0))
+        if self._random_action_delay_enabled():
+            self.action_delay_enabled[:] = (self.sampled_delay_step > 0).to(dtype=torch.float32)
+            self.delay_step[:] = self.sampled_delay_step.to(dtype=torch.float32)
+        else:
+            self.action_delay_enabled[:] = float(self._action_delay_active())
+            self.delay_step[:] = float(max(int(self.cfg.delay_step), 0))
         self.delayed_command_z[:] = command["executed_command_z"].to(device=self.device, dtype=torch.float32)
+
+    def _random_action_delay_enabled(self) -> bool:
+        return len(self.delay_step_choices) > 0
+
+    def _initial_delay_step(self) -> int:
+        if self._random_action_delay_enabled():
+            if not self.cfg.enabled or not self.cfg.action_delay_enabled:
+                return 0
+            return max(self.delay_step_choices)
+        return max(int(self.cfg.delay_step), 0)
+
+    def _max_configured_action_delay_step(self) -> int:
+        if self._random_action_delay_enabled():
+            return max(self.delay_step_choices)
+        return max(int(self.cfg.delay_step), 0)
+
+    def _sample_action_delay_steps(self, env_ids: torch.Tensor) -> torch.Tensor:
+        if not self._random_action_delay_enabled():
+            fixed_delay = max(int(self.cfg.delay_step), 0)
+            return torch.full(
+                (env_ids.numel(),),
+                fixed_delay,
+                dtype=torch.long,
+                device=self.device,
+            )
+        if not self.cfg.enabled or not self.cfg.action_delay_enabled:
+            return torch.zeros((env_ids.numel(),), dtype=torch.long, device=self.device)
+
+        choices = torch.as_tensor(self.delay_step_choices, dtype=torch.long, device=self.device)
+        choice_ids = torch.randint(0, choices.numel(), (env_ids.numel(),), device=self.device)
+        return choices[choice_ids]
+
+    @staticmethod
+    def _validate_delay_step_choices(values: Sequence[int] | None) -> tuple[int, ...]:
+        if values in (None, ""):
+            return ()
+        if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+            raise ValueError("robustness.delay_step_choices must be a sequence of non-negative integers.")
+
+        choices: list[int] = []
+        for value in values:
+            if isinstance(value, bool):
+                raise ValueError("robustness.delay_step_choices values must be non-negative integers.")
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError("robustness.delay_step_choices values must be non-negative integers.")
+            try:
+                step = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "robustness.delay_step_choices values must be non-negative integers."
+                ) from exc
+            if step < 0:
+                raise ValueError("robustness.delay_step_choices values must be non-negative integers.")
+            choices.append(step)
+        return tuple(choices)
 
     def _velocity_response_active(self) -> bool:
         return bool(self.cfg.enabled and self.cfg.velocity_response_enabled)

@@ -177,12 +177,32 @@ Robustness settings are configured under `robustness` in the environment YAML fi
 | --- | --- | --- |
 | Ball-mass variation | `ball_mass_variation_enabled`, `ball_mass_range` | Tests generalization to object parameter changes. |
 | Low-level gain variation | `controller_gain_variation_enabled`, `controller_gain_range` | Tests sensitivity to imperfect command tracking by the drone controller. |
-| Action delay | `action_delay_enabled`, `delay_step` | Inserts a fixed-step command delay between high-level output and executed command. |
+| Action delay | `action_delay_enabled`, `delay_step`, `delay_step_choices` | Inserts a fixed or reset-time randomized command delay between high-level output and executed command. |
 | Velocity response | `velocity_response_enabled`, target ranges, sim scalars, and noise parameters | Uses a feed-forward lead-lag command so the existing velocity loop approximates a configured final first-order response; supports no noise, Gaussian noise, or OU noise. |
 | External disturbance | `external_disturbance_enabled`, OU process parameters | Applies temporally correlated vertical motion at the otherwise fixed beam endpoint. |
 
+An empty `delay_step_choices` keeps the legacy fixed `delay_step` behavior. A
+non-empty list takes precedence and samples one delay uniformly and independently
+for each environment whenever that environment resets; the sampled value remains
+fixed for the episode. Zero is a valid choice and makes that environment execute
+the current command without delay. The existing `delay_step` diagnostic reports
+the sampled value for each environment.
+
+```yaml
+robustness:
+  enabled: true
+  action_delay_enabled: true
+  delay_step: 15              # Used only when delay_step_choices is empty.
+  delay_step_choices: [0, 8, 15]
+```
+
+State predictors continue to use one fixed nominal horizon. An explicit
+`state_predictor.delay_step` is therefore valid with random environment delays.
+`delay_step: auto` resolves only for fixed delay or a single unique choice; with
+multiple choices an enabled predictor requires an explicit nominal value.
+
 The delay and velocity-response stages are independent. With both enabled, the
-command passes through the fixed-step delay first and then the lead-lag stage.
+command passes through the configured delay first and then the lead-lag stage.
 When `velocity_response_enabled: false`, the stage is an exact command
 passthrough. When enabled, `velocity_response_tau_s_range`,
 `velocity_response_gain_range`, and `velocity_response_bias_range` describe the
@@ -410,8 +430,10 @@ scripts/run_nffb_policy_eval_configs.sh --headless
 Use only delay-free environment configs with the predictor-disabled run
 config. NFFB requires the velocity interface, a reference preview
 horizon of at least one step in delay-free mode. With an action delay of
-`D > 0`, the environment and state predictor must both be enabled with the
-same `delay_step`, and the preview must satisfy `H >= D + 1`. The controller
+`D > 0`, the environment and state predictor must both be enabled. Fixed-delay
+environments require matching `delay_step` values; random-delay environments
+use the predictor's explicitly configured fixed nominal `D`. In both cases the
+preview must satisfy `H >= D + 1`. The controller
 then uses the predicted plant state at `k + D`, `pg_D`, `vg_D`, and
 `(vg_{D+1} - vg_D) / dt`. Its integral and command filter still advance only
 once per policy call. See
@@ -428,6 +450,51 @@ The search is resumable and writes a candidate leaderboard, per-episode
 tracking/frequency metrics, deterministic stress tests, feedforward ablation,
 and a 500-episode acceptance report. Its search space and thresholds are in
 `baselines/configs/nffb_sine_tuning.yaml`.
+
+For a coarse search shared by the `constant`, `random_b_spline`, and
+`random_ramp_dwell` families currently selected by
+`environments/configs/unified_tracking_mixed.yaml`, run:
+
+```bash
+conda run -n isaac-sim python scripts/tune_nffb_mixed.py --stage all
+```
+
+The mixed workflow keeps that environment config unchanged, screens candidates
+with `seed=666`, and validates the finalists with the independent single seed
+`667`. The current tuning config disables NFFB velocity-response compensation;
+the explicit response midpoint `tau=0.155 s`, `gain=0.86`, and `bias=-0.0035`
+is retained only for response-model diagnostics and future predictor use.
+Mixed candidates are ranked by safety/coverage and absolute per-family errors
+rather than sine NRMSE or fitted phase/gain. Search settings and gates are in
+`baselines/configs/nffb_mixed_tuning.yaml`, and resumable artifacts are written
+under `logs/nffb/mixed_tuning/coarse_v1_no_comp/`.
+
+The completed no-compensation run did not promote a policy. Its safety-ranked
+candidate used `outer_omega=0.68`, `filter_omega=14`, and `k_theta=6`. It had no
+termination, boundary, or non-finite failures across 192 validation episodes
+and improved mean RMSE by about `8.1%` relative to the generic policy, but its
+`1.61%` final-quarter saturation rate exceeded the `1%` gate. The earlier
+compensation-enabled `coarse_v1` run also failed its gates. See
+`docs/nffb_controller.md#no-compensation-coarse-v1-result` before treating any
+generated candidate as a unified controller.
+
+Refine that provisional point with the bounded no-compensation grid:
+
+```bash
+conda run -n isaac-sim python scripts/tune_nffb_mixed.py \
+  --config baselines/configs/nffb_mixed_grid_tuning.yaml \
+  --stage all
+```
+
+The completed `grid_v1_no_comp_seed668` run evaluated all 27 combinations with
+500 parallel environments and 500 episodes each. Every candidate avoided
+termination, boundary, non-finite, coverage, and full-run saturation failures,
+but all exceeded the 1% final-quarter saturation gate. The safety-ranked best
+was `outer_omega=0.55`, `k_theta=4.5`, and `integral_pole=0.10`; it achieved
+`0.07191 m` mean RMSE and `1.338%` final-quarter saturation. Results and the
+explicit best-observed policy are retained under
+`logs/nffb/mixed_tuning/grid_v1_no_comp_seed668/`; the policy is an observed
+single-seed grid winner, not a promoted baseline.
 
 The phase-zero sine-specific policy selected by this workflow is
 `baselines/configs/nffb_sine_phase0_acc5.yaml`. Evaluate it without changing
@@ -571,6 +638,9 @@ Template configs:
 - `baselines/configs/nffb_unified_tracking_predictor_eval.yaml`
 - `baselines/configs/nffb_unified_tracking_response_compensation_eval.yaml`
 - `baselines/configs/nffb_unified_tracking_predictor_response_compensation_eval.yaml`
+- `baselines/configs/nffb_mixed_tuning.yaml`
+- `baselines/configs/nffb_mixed_grid_tuning.yaml`
+- `baselines/configs/nffb_unified_mixed_coarse_no_comp.yaml` (created only after a passing no-compensation mixed validation)
 - `baselines/configs/rl_rpo_relative_reference_preview_predictor_eval.yaml`
 - `baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml`
 

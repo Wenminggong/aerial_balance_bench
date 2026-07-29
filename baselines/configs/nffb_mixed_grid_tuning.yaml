@@ -1,0 +1,56 @@
+base_run_config: baselines/configs/nffb_unified_tracking_eval.yaml
+base_env_config: environments/configs/unified_tracking_mixed.yaml
+base_policy_config: baselines/configs/nffb.yaml
+sine_policy_config: baselines/configs/nffb_sine_phase0_acc5.yaml
+
+output_root: logs/nffb/mixed_tuning
+session_name: grid_v1_no_comp_seed668
+output_policy_name: nffb_unified_mixed_grid_best_no_comp
+
+required_types: [constant, random_b_spline, random_ramp_dwell]
+
+# The environment response remains active, but NFFB does not invert or predict it.
+policy_defaults:
+  state_predictor:
+    enabled: false
+    delay_step: 0
+    step_dt: auto
+    max_acc: auto
+    max_velocity: auto
+    velocity_response_enabled: true
+    velocity_response_tau_s: 0.155
+    velocity_response_gain: 0.86
+    velocity_response_bias: -0.0035
+    velocity_response_max_abs_velocity: auto
+  velocity_response_compensation:
+    enabled: false
+    parameter_source: state_predictor
+
+# Safety-ranked winner from coarse_v1_no_comp; non-grid fields remain fixed.
+initial_candidate:
+  outer_omega: 0.68
+  outer_zeta: 1.0
+  integral_pole: 0.0
+  filter_omega: 14.0
+  filter_zeta: 1.0
+  k_theta: 6.0
+  omega_max: 0.5
+  feedforward: true
+
+search:
+  strategy: grid
+  max_combinations: 30
+  parameters:
+    outer_omega: [0.55, 0.68, 0.80]
+    k_theta: [4.5, 5.25, 6.0]
+    integral_pole: [0.0, 0.05, 0.10]
+
+evaluation:
+  seed: 668
+  num_envs: 500
+  episodes: 500
+  min_episodes_per_type: 130
+
+acceptance:
+  full_saturation_rate: 0.05
+  tail_saturation_rate: 0.01

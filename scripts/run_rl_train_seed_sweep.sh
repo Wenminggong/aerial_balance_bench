@@ -16,7 +16,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
 CONFIG="${CONFIG:-baselines/configs/rl_target_position_rpo_train.yaml}"
-LOG_ROOT="${LOG_ROOT:-logs/rl_train/rl_train_seed_sweeps}"
+LOG_ROOT="${LOG_ROOT:-logs/rl_unified_tracking/rl_train_seed_sweeps}"
 RUN_PREFIX="${RUN_PREFIX:-rpo_target_position_legacy8}"
 NUM_SEEDS="${NUM_SEEDS:-3}"
 SEED_MIN="${SEED_MIN:-0}"

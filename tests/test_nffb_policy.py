@@ -463,6 +463,21 @@ def test_environment_contract_accepts_aligned_delay_predictor_and_preview():
     )
 
 
+def test_environment_contract_accepts_fixed_nominal_predictor_for_random_delay():
+    validate_nffb_environment_contract(
+        task_name="unified_tracking",
+        interface_name="velocity",
+        reference_preview_enabled=True,
+        reference_preview_future_steps=5,
+        robustness_enabled=True,
+        action_delay_enabled=True,
+        delay_step=99,
+        delay_step_choices=(0, 3, 8),
+        state_predictor_enabled=True,
+        state_predictor_delay_step=4,
+    )
+
+
 def test_environment_contract_requires_d_plus_one_preview_for_nffb():
     with pytest.raises(ValueError, match="future_steps >= 9"):
         validate_nffb_environment_contract(

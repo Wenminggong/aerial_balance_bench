@@ -45,6 +45,7 @@ def validate_nffb_environment_contract(
     robustness_enabled: bool,
     action_delay_enabled: bool,
     delay_step: int,
+    delay_step_choices: Sequence[int] = (),
     state_predictor_enabled: bool = False,
     state_predictor_delay_step: int = 0,
 ):
@@ -53,23 +54,30 @@ def validate_nffb_environment_contract(
         raise ValueError("NFFB supports only task_name='unified_tracking'.")
     if interface_name != "velocity":
         raise ValueError("NFFB supports only interface_name='velocity'.")
-    delay_active = robustness_enabled and action_delay_enabled and int(delay_step) > 0
+    delay_step_choices = tuple(int(value) for value in (delay_step_choices or ()))
+    random_delay_enabled = len(delay_step_choices) > 0
+    configured_delay_step = max(delay_step_choices) if random_delay_enabled else int(delay_step)
+    delay_active = robustness_enabled and action_delay_enabled and configured_delay_step > 0
     predictor_active = state_predictor_enabled and int(state_predictor_delay_step) > 0
     if delay_active and not predictor_active:
         raise ValueError(
-            "NFFB action delay requires an active state predictor with a matching delay_step."
+            "NFFB action delay requires an active fixed-horizon state predictor."
         )
     if predictor_active and not delay_active:
         raise ValueError(
             "NFFB state predictor must not be active when the environment action delay is inactive."
         )
-    if delay_active and int(state_predictor_delay_step) != int(delay_step):
+    if (
+        delay_active
+        and not random_delay_enabled
+        and int(state_predictor_delay_step) != configured_delay_step
+    ):
         raise ValueError(
             "NFFB state predictor delay_step must match robustness.delay_step; "
-            f"got {state_predictor_delay_step} != {delay_step}."
+            f"got {state_predictor_delay_step} != {configured_delay_step}."
         )
 
-    required_future_steps = int(delay_step) + 1 if delay_active else 1
+    required_future_steps = int(state_predictor_delay_step) + 1 if predictor_active else 1
     if (
         not reference_preview_enabled
         or int(reference_preview_future_steps) < required_future_steps

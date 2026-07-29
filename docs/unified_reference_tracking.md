@@ -266,7 +266,9 @@ and predictor-consumed `pg_0 ... pg_D` fields.
 
 Only `relative_reference_preview` is supported with an active predictor, and
 only in RL evaluation/deployment. The environment action delay must actually
-be enabled and have the same `delay_step` as the predictor. Full
+be enabled. Fixed-delay evaluation requires the same `delay_step` as the
+predictor; random-delay evaluation uses an explicitly configured fixed nominal
+predictor horizon. Full
 `reference_preview` plus predictor remains unsupported, and `rl_train.py`
 continues to reject every active predictor.
 
@@ -523,10 +525,13 @@ for type in constant sine triangle trapezoid random_b_spline random_ramp_dwell; 
 done
 ```
 
-Startup requires `robustness.enabled=true`,
-`robustness.action_delay_enabled=true`, and matching positive predictor and
-environment `delay_step` values. A delayed environment with the predictor
-disabled is still accepted as the uncompensated comparison baseline.
+Startup requires `robustness.enabled=true` and
+`robustness.action_delay_enabled=true`. Fixed-delay evaluation requires matching
+positive predictor and environment `delay_step` values. With non-empty random
+`delay_step_choices`, configure a fixed nominal predictor `delay_step`; runtime
+per-environment predictor horizons are intentionally unsupported. A delayed
+environment with the predictor disabled is still accepted as the uncompensated
+comparison baseline.
 
 Use a new logging root/run name when changing metric schemas or experimental distributions. The CSV writer preserves an existing file's header, so reusing an unrelated legacy summary file could omit newly introduced columns.
 

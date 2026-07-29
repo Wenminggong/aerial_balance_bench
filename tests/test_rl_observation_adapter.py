@@ -619,6 +619,20 @@ def test_predictor_environment_contract_accepts_aligned_relative_preview():
         context="RL target_position",
     )
 
+    # A fixed nominal predictor horizon is allowed for per-environment random delay.
+    validate_rl_predictor_environment_contract(
+        observation_mode="relative_reference_preview",
+        reference_preview_samples=10,
+        predictor_enabled=True,
+        predictor_delay_step=6,
+        preview_enabled=True,
+        preview_future_steps=36,
+        robustness_enabled=True,
+        action_delay_enabled=True,
+        environment_delay_step=99,
+        environment_delay_step_choices=(0, 4, 8),
+    )
+
     # A delayed environment without compensation remains a supported baseline.
     validate_rl_predictor_environment_contract(
         observation_mode="relative_reference_preview",

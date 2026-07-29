@@ -30,7 +30,12 @@ def _install_configclass_stub_if_needed():
 
 _install_configclass_stub_if_needed()
 
-from environments.robustness.robustness_manager import RobustnessManager, RobustnessManagerCfg  # noqa: E402
+from environments.robustness.robustness_manager import (  # noqa: E402
+    CommandDelayQueue,
+    PerEnvCommandDelayQueue,
+    RobustnessManager,
+    RobustnessManagerCfg,
+)
 
 
 class FakeVelocityInterface:
@@ -82,6 +87,102 @@ def initialize_command_models(manager: RobustnessManager, env, env_ids: torch.Te
     manager._reset_velocity_response(env, env_ids)
 
 
+def test_fixed_delay_queue_preserves_legacy_sequence():
+    queue = CommandDelayQueue(2, 1, 1, torch.device("cpu"))
+    queue.reset(torch.tensor([0]), torch.zeros((1, 1)))
+
+    outputs = [queue.step(torch.tensor([[value]])).item() for value in (1.0, 2.0, 3.0)]
+
+    assert outputs == pytest.approx([0.0, 0.0, 1.0])
+
+
+def test_per_environment_delay_queue_supports_zero_and_mixed_delays():
+    queue = PerEnvCommandDelayQueue(2, 3, 1, torch.device("cpu"))
+    queue.reset(torch.arange(3), torch.zeros((3, 1)))
+    delay_steps = torch.tensor([0, 1, 2])
+
+    first = queue.step(torch.tensor([[1.0], [10.0], [100.0]]), delay_steps)
+    second = queue.step(torch.tensor([[2.0], [20.0], [200.0]]), delay_steps)
+    third = queue.step(torch.tensor([[3.0], [30.0], [300.0]]), delay_steps)
+
+    assert torch.equal(first[:, 0], torch.tensor([1.0, 0.0, 0.0]))
+    assert torch.equal(second[:, 0], torch.tensor([2.0, 10.0, 0.0]))
+    assert torch.equal(third[:, 0], torch.tensor([3.0, 20.0, 100.0]))
+
+
+@pytest.mark.parametrize("choices", ([True], [-1], [1.5], 1, "1"))
+def test_random_delay_choices_reject_invalid_values(choices):
+    with pytest.raises(ValueError, match="non-negative integers"):
+        RobustnessManager(make_cfg(delay_step_choices=choices), 1, "cpu")
+
+
+def test_random_delay_reset_samples_selected_envs_and_preserves_other_histories():
+    torch.manual_seed(7)
+    cfg = make_cfg(
+        enabled=True,
+        action_delay_enabled=True,
+        delay_step=99,
+        delay_step_choices=(0, 1, 2),
+    )
+    manager = RobustnessManager(cfg, 3, "cpu")
+    env = make_env(3)
+    all_env_ids = torch.arange(3)
+    manager._reset_action_delay(env, all_env_ids)
+    original_delays = manager.sampled_delay_step.clone()
+    manager.per_env_delay_queue.buffer[:, 0] = 11.0
+    manager.per_env_delay_queue.buffer[:, 2] = 33.0
+
+    manager._reset_action_delay(env, torch.tensor([1]))
+
+    assert manager.sampled_delay_step[0] == original_delays[0]
+    assert manager.sampled_delay_step[2] == original_delays[2]
+    assert manager.sampled_delay_step[1].item() in cfg.delay_step_choices
+    assert torch.all(manager.per_env_delay_queue.buffer[:, 0] == 11.0)
+    assert torch.all(manager.per_env_delay_queue.buffer[:, 2] == 33.0)
+
+
+def test_random_delay_state_reports_each_environment_actual_delay():
+    cfg = make_cfg(
+        enabled=True,
+        action_delay_enabled=True,
+        delay_step=99,
+        delay_step_choices=(0, 1, 2),
+    )
+    manager = RobustnessManager(cfg, 3, "cpu")
+    env = make_env(3)
+    manager._reset_action_delay(env, torch.arange(3))
+    manager.sampled_delay_step[:] = torch.tensor([0, 1, 2])
+    env.control_interface.command_velocity[:, 2] = torch.tensor([1.0, 10.0, 100.0])
+
+    state = manager.after_command_update(env, env.control_interface.get_command_state())
+    diagnostics = manager.get_state()
+
+    assert torch.equal(state["executed_command_z"], torch.tensor([1.0, 0.0, 0.0]))
+    assert torch.equal(diagnostics["delay_step"], torch.tensor([0.0, 1.0, 2.0]))
+    assert torch.equal(diagnostics["action_delay_enabled"], torch.tensor([0.0, 1.0, 1.0]))
+    assert torch.equal(diagnostics["delayed_command_z"], torch.tensor([1.0, 0.0, 0.0]))
+
+
+def test_zero_only_random_delay_choice_is_an_exact_passthrough():
+    cfg = make_cfg(
+        enabled=True,
+        action_delay_enabled=True,
+        delay_step=99,
+        delay_step_choices=(0,),
+    )
+    manager = RobustnessManager(cfg, 1, "cpu")
+    env = make_env()
+    manager._reset_action_delay(env, torch.tensor([0]))
+    env.control_interface.set_command_z(0.75)
+
+    state = manager.after_command_update(env, env.control_interface.get_command_state())
+
+    assert manager.per_env_delay_queue is None
+    assert state["executed_command_z"].item() == pytest.approx(0.75)
+    assert manager.delay_step.item() == 0.0
+    assert manager.action_delay_enabled.item() == 0.0
+
+
 def test_disabled_response_is_exact_passthrough():
     cfg = make_cfg(enabled=False, velocity_response_enabled=True)
     manager = RobustnessManager(cfg, 1, "cpu")
@@ -112,16 +213,43 @@ def test_delay_precedes_lead_lag_response():
     initialize_command_models(manager, env, torch.tensor([0]))
 
     env.control_interface.set_command_z(1.0)
-    first = manager.after_command_update(env, env.control_interface.get_command_state())
-    first_z = first["executed_command_z"].item()
+    manager.after_command_update(env, env.control_interface.get_command_state())
+    first_delayed_z = manager.delayed_command_z.item()
+    first_response_input_z = manager.velocity_response_input_z.item()
     env.control_interface.set_command_z(1.0)
     second = manager.after_command_update(env, env.control_interface.get_command_state())
 
-    assert first_z == 0.0
+    assert first_delayed_z == 0.0
+    assert first_response_input_z == 0.0
     assert manager.delayed_command_z.item() == 1.0
-    assert second["executed_command_z"].item() == pytest.approx(1.0)
+    assert torch.isfinite(second["executed_command_z"]).all()
     assert manager.velocity_response_input_z.item() == 1.0
     assert manager.velocity_response_executed_z.item() != pytest.approx(1.0)
+
+
+def test_random_delay_precedes_lead_lag_response():
+    cfg = make_cfg(
+        enabled=True,
+        action_delay_enabled=True,
+        delay_step=99,
+        delay_step_choices=(1,),
+        velocity_response_enabled=True,
+        velocity_response_tau_s_range=(0.139, 0.139),
+        velocity_response_gain_range=(1.0, 1.0),
+        velocity_response_bias_range=(-0.00055, -0.00055),
+    )
+    manager = RobustnessManager(cfg, 1, "cpu")
+    env = make_env()
+    initialize_command_models(manager, env, torch.tensor([0]))
+
+    env.control_interface.set_command_z(1.0)
+    first = manager.after_command_update(env, env.control_interface.get_command_state())
+
+    assert manager.delay_queue is None
+    assert manager.per_env_delay_queue is not None
+    assert manager.delayed_command_z.item() == 0.0
+    assert manager.velocity_response_input_z.item() == 0.0
+    assert first["executed_command_z"].item() != pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -154,7 +282,11 @@ def test_delay_and_response_flags_are_independent(
 
     state = manager.after_command_update(env, env.control_interface.get_command_state())
 
-    assert state["executed_command_z"].item() == pytest.approx(expected_first)
+    assert manager.delayed_command_z.item() == pytest.approx(expected_first)
+    if velocity_response_enabled:
+        assert manager.velocity_response_input_z.item() == pytest.approx(expected_first)
+    else:
+        assert state["executed_command_z"].item() == pytest.approx(expected_first)
 
 
 def test_reset_samples_each_environment_and_preserves_unselected_state():
@@ -249,9 +381,15 @@ def test_state_exposes_sim_parameters_and_compensated_command():
     manager.after_command_update(env, env.control_interface.get_command_state())
     state = manager.get_state()
 
-    assert state["velocity_response_sim_tau_s"].item() == pytest.approx(0.139)
-    assert state["velocity_response_sim_gain"].item() == pytest.approx(1.0)
-    assert state["velocity_response_sim_bias"].item() == pytest.approx(-0.00055)
+    assert state["velocity_response_sim_tau_s"].item() == pytest.approx(
+        cfg.velocity_response_sim_tau_s
+    )
+    assert state["velocity_response_sim_gain"].item() == pytest.approx(
+        cfg.velocity_response_sim_gain
+    )
+    assert state["velocity_response_sim_bias"].item() == pytest.approx(
+        cfg.velocity_response_sim_bias
+    )
     assert state["velocity_response_compensated_command_z"].item() == pytest.approx(
         env.control_interface.executed_velocity[0, 2].item()
     )

@@ -84,6 +84,7 @@ def validate_rl_predictor_environment_contract(
     robustness_enabled: bool,
     action_delay_enabled: bool,
     environment_delay_step: int,
+    environment_delay_step_choices: Sequence[int] = (),
     moving_reference: bool = True,
     context: str = "RL unified tracking",
 ) -> None:
@@ -92,7 +93,11 @@ def validate_rl_predictor_environment_contract(
     if not predictor_enabled or delay_step <= 0:
         return
 
-    environment_delay_step = int(environment_delay_step)
+    delay_step_choices = tuple(int(value) for value in (environment_delay_step_choices or ()))
+    random_delay_enabled = len(delay_step_choices) > 0
+    environment_delay_step = (
+        max(delay_step_choices) if random_delay_enabled else int(environment_delay_step)
+    )
     environment_delay_active = (
         bool(robustness_enabled)
         and bool(action_delay_enabled)
@@ -104,7 +109,7 @@ def validate_rl_predictor_environment_contract(
             f"is active with delay_step={delay_step}. Enable robustness.enabled and "
             "robustness.action_delay_enabled with a positive delay_step."
         )
-    if delay_step != environment_delay_step:
+    if not random_delay_enabled and delay_step != environment_delay_step:
         raise ValueError(
             f"{context} state predictor delay_step must match robustness.delay_step; "
             f"got predictor D={delay_step}, environment D={environment_delay_step}."

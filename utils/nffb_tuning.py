@@ -1,4 +1,4 @@
-"""Rollout analysis helpers for NFFB sine-reference tuning."""
+"""Rollout analysis helpers for NFFB reference-tracking tuning."""
 
 from __future__ import annotations
 
@@ -18,6 +18,15 @@ SATURATION_FIELDS = (
     "policy_velocity_saturated",
     "policy_acceleration_saturated",
 )
+
+DEFAULT_TRAJECTORY_TYPE_TO_ID = {
+    "sine": 0,
+    "triangle": 1,
+    "trapezoid": 2,
+    "constant": 3,
+    "random_b_spline": 4,
+    "random_ramp_dwell": 5,
+}
 
 
 def _finite_mean(values: Iterable[float]) -> float:
@@ -160,7 +169,7 @@ def analyze_rollout(
     safe_position_min: float = 0.02,
     safe_position_max: float = 0.68,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Compute per-episode and aggregate sine-tracking diagnostics."""
+    """Compute per-episode diagnostics and legacy sine aggregates."""
     run_dir = Path(run_dir).expanduser().resolve()
     rollout_path = run_dir / "rollout.npz"
     if not rollout_path.exists():
@@ -169,6 +178,14 @@ def analyze_rollout(
     metadata = _load_metadata(run_dir)
     step_dt = float(metadata.get("step_dt", 1.0 / 60.0))
     omega_limit = float(metadata.get("constraints", {}).get("omega_max", 0.5))
+    configured_type_mapping = metadata.get(
+        "trajectory_type_to_id",
+        DEFAULT_TRAJECTORY_TYPE_TO_ID,
+    )
+    type_id_to_name = {
+        int(type_id): str(name)
+        for name, type_id in dict(configured_type_mapping).items()
+    }
     with np.load(rollout_path, allow_pickle=False) as loaded:
         rollout = {key: loaded[key] for key in loaded.files}
 
@@ -221,6 +238,22 @@ def analyze_rollout(
             env_id,
             float("nan"),
         )
+        trajectory_type_value = _parameter_value(
+            rollout,
+            "step_trajectory_type_id",
+            episode_slice,
+            env_id,
+            float("nan"),
+        )
+        trajectory_type_id = (
+            int(round(trajectory_type_value))
+            if math.isfinite(trajectory_type_value)
+            else -1
+        )
+        trajectory_type = type_id_to_name.get(
+            trajectory_type_id,
+            "unknown" if trajectory_type_id < 0 else f"type_{trajectory_type_id}",
+        )
         primary_signals = (pb, pg, theta, action)
         nonfinite = any(not np.isfinite(signal).all() for signal in primary_signals)
         mae = float(np.mean(np.abs(error))) if not nonfinite else float("inf")
@@ -251,6 +284,8 @@ def analyze_rollout(
         row: dict[str, Any] = {
             "env_id": env_id,
             "episode_index": episode_index,
+            "trajectory_type_id": trajectory_type_id,
+            "trajectory_type": trajectory_type,
             "samples": error.size,
             "duration_s": error.size * step_dt,
             "center": center,
@@ -326,6 +361,8 @@ def analyze_rollout(
             signal = np.asarray(signal, dtype=bool)
             row[f"{field}_rate"] = _safe_rate(signal)
             row[f"steady_{field}_rate"] = _safe_rate(signal[steady_start:])
+            tail_start = min(signal.size, int(math.floor(0.75 * signal.size)))
+            row[f"tail_{field}_rate"] = _safe_rate(signal[tail_start:])
 
         episode_rows.append(row)
 
@@ -339,6 +376,159 @@ def analyze_rollout(
         }
     )
     return episode_rows, aggregate
+
+
+def aggregate_mixed_episode_metrics(
+    episode_rows: list[Mapping[str, Any]],
+    *,
+    required_types: Iterable[str],
+    min_episodes_per_type: int,
+    full_saturation_rate: float = 0.05,
+    tail_saturation_rate: float = 0.01,
+) -> dict[str, Any]:
+    """Aggregate mixed-reference metrics with per-family coverage gates."""
+    required_types = tuple(str(name) for name in required_types)
+    aggregate = aggregate_episode_metrics(episode_rows)
+    aggregate["required_trajectory_types"] = list(required_types)
+    aggregate["min_episodes_per_type"] = int(min_episodes_per_type)
+
+    type_metrics: dict[str, dict[str, Any]] = {}
+    coverage_shortfall = 0
+    worst_type_p95_rmse = float("-inf")
+    for trajectory_type in required_types:
+        rows = [
+            row
+            for row in episode_rows
+            if str(row.get("trajectory_type", "unknown")) == trajectory_type
+        ]
+        count = len(rows)
+        coverage_shortfall += max(int(min_episodes_per_type) - count, 0)
+        metrics = {
+            "episode_count": count,
+            "termination_count": sum(bool(row["terminated"]) for row in rows),
+            "boundary_violation_count": sum(
+                bool(row["boundary_violation"]) for row in rows
+            ),
+            "nonfinite_count": sum(bool(row["nonfinite"]) for row in rows),
+            "mean_mae": _finite_mean(float(row["mae"]) for row in rows),
+            "mean_rmse": _finite_mean(float(row["rmse"]) for row in rows),
+            "p95_rmse": _finite_percentile(
+                (float(row["rmse"]) for row in rows),
+                95.0,
+            ),
+            "mean_maxe": _finite_mean(float(row["maxe"]) for row in rows),
+            "p95_maxe": _finite_percentile(
+                (float(row["maxe"]) for row in rows),
+                95.0,
+            ),
+            "mean_abs_signed_error": _finite_mean(
+                abs(float(row["signed_error"])) for row in rows
+            ),
+        }
+        for field in SATURATION_FIELDS:
+            metrics[f"mean_{field}_rate"] = _finite_mean(
+                float(row[f"{field}_rate"]) for row in rows
+            )
+            metrics[f"mean_tail_{field}_rate"] = _finite_mean(
+                float(
+                    row.get(
+                        f"tail_{field}_rate",
+                        row.get(f"steady_{field}_rate", 0.0),
+                    )
+                )
+                for row in rows
+            )
+        metrics["max_full_saturation_rate"] = max(
+            (
+                float(metrics[f"mean_{field}_rate"])
+                for field in SATURATION_FIELDS
+                if math.isfinite(float(metrics[f"mean_{field}_rate"]))
+            ),
+            default=float("nan"),
+        )
+        metrics["max_tail_saturation_rate"] = max(
+            (
+                float(metrics[f"mean_tail_{field}_rate"])
+                for field in SATURATION_FIELDS
+                if math.isfinite(float(metrics[f"mean_tail_{field}_rate"]))
+            ),
+            default=float("nan"),
+        )
+        type_metrics[trajectory_type] = metrics
+        if math.isfinite(float(metrics["p95_rmse"])):
+            worst_type_p95_rmse = max(
+                worst_type_p95_rmse,
+                float(metrics["p95_rmse"]),
+            )
+
+        prefix = trajectory_type
+        for name, value in metrics.items():
+            aggregate[f"{prefix}_{name}"] = value
+
+    aggregate["type_metrics"] = type_metrics
+    aggregate["coverage_shortfall"] = coverage_shortfall
+    aggregate["worst_type_p95_rmse"] = (
+        worst_type_p95_rmse
+        if math.isfinite(worst_type_p95_rmse)
+        else float("nan")
+    )
+    aggregate["max_tail_saturation_rate"] = max(
+        (
+            float(metrics["max_tail_saturation_rate"])
+            for metrics in type_metrics.values()
+            if math.isfinite(float(metrics["max_tail_saturation_rate"]))
+        ),
+        default=float("inf"),
+    )
+    aggregate["coverage_failure"] = coverage_shortfall > 0
+    aggregate["hard_failure"] = bool(
+        aggregate["coverage_failure"]
+        or int(aggregate.get("termination_count", 0)) > 0
+        or int(aggregate.get("boundary_violation_count", 0)) > 0
+        or int(aggregate.get("nonfinite_count", 0)) > 0
+        or float(aggregate.get("max_full_saturation_rate", float("inf")))
+        > float(full_saturation_rate)
+        or float(aggregate["max_tail_saturation_rate"])
+        > float(tail_saturation_rate)
+    )
+    return aggregate
+
+
+def mixed_tuning_rank_key(metrics: Mapping[str, Any]) -> tuple[float, ...]:
+    """Rank mixed-reference candidates by feasibility and absolute errors."""
+
+    def finite_or_infinity(name: str) -> float:
+        value = float(metrics.get(name, float("nan")))
+        return value if math.isfinite(value) else float("inf")
+
+    failure_count = (
+        max(int(metrics.get("termination_count", 0)), 0)
+        + max(int(metrics.get("boundary_violation_count", 0)), 0)
+        + max(int(metrics.get("nonfinite_count", 0)), 0)
+    )
+    full_saturation_excess = max(
+        finite_or_infinity("max_full_saturation_rate") - 0.05,
+        0.0,
+    )
+    tail_saturation_excess = max(
+        finite_or_infinity("max_tail_saturation_rate") - 0.01,
+        0.0,
+    )
+
+    return (
+        float(bool(metrics.get("hard_failure", True))),
+        float(max(int(metrics.get("coverage_shortfall", 0)), 0)),
+        float(failure_count),
+        full_saturation_excess,
+        tail_saturation_excess,
+        finite_or_infinity("worst_type_p95_rmse"),
+        finite_or_infinity("mean_rmse"),
+        finite_or_infinity("p95_maxe"),
+        finite_or_infinity("max_full_saturation_rate"),
+        finite_or_infinity("max_tail_saturation_rate"),
+        finite_or_infinity("mean_action_rms"),
+        finite_or_infinity("bandwidth_cost"),
+    )
 
 
 def aggregate_episode_metrics(episode_rows: list[Mapping[str, Any]]) -> dict[str, Any]:

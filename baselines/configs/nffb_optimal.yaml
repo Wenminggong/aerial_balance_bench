@@ -1,0 +1,89 @@
+policy_name: nffb
+
+model:
+  plank_length: auto
+  rope_length: auto
+  ball_position_offset: auto
+  gravity: auto
+  ball_mass: auto
+  ball_radius: auto
+  ball_inertia_ratio: 0.4
+  epsilon: 1.0e-6
+
+# # Safety-ranked best
+# outer_loop:
+#   natural_frequency: 0.55
+#   damping_ratio: 1.0
+#   integral_pole: 0.10
+#   integral_limit: 0.25
+#   acceleration_feedforward_enabled: true
+
+# command_filter:
+#   natural_frequency: 14.0
+#   damping_ratio: 1.0
+
+# inner_loop:
+#   k_theta: 4.5
+
+# constraints:
+#   theta_max: 0.6981317007977318
+#   omega_max: 0.5
+#   max_acc: auto
+#   max_velocity: auto
+#   max_reference_acceleration: auto
+
+# Lowest-error point
+outer_loop:
+  natural_frequency: 0.80
+  damping_ratio: 1.0
+  integral_pole: 0.10
+  integral_limit: 0.25
+  acceleration_feedforward_enabled: true
+
+command_filter:
+  natural_frequency: 14.0
+  damping_ratio: 1.0
+
+inner_loop:
+  k_theta: 6.0
+
+constraints:
+  theta_max: 0.6981317007977318
+  omega_max: 0.5
+  max_acc: auto
+  max_velocity: auto
+  max_reference_acceleration: auto
+
+# Optional action-delay compensation. It is disabled by default so existing
+# delay-free NFFB runs and tuning results keep their original behavior.
+state_predictor:
+  enabled: true
+  delay_step: 8
+  solver: rk4
+  step_dt: auto
+  max_acc: auto
+  max_velocity: auto
+  velocity_response_enabled: true
+  velocity_response_tau_s: 0.155
+  velocity_response_gain: 0.86
+  velocity_response_bias: -0.0035
+  velocity_response_max_abs_velocity: 0.0
+  plank_length: auto
+  rope_length: auto
+  ball_position_offset: auto
+  gravity: auto
+  ball_mass: auto
+  ball_radius: auto
+  ball_inertia_ratio: auto
+  epsilon: auto
+
+# Optional deterministic inverse of the first-order response model. With
+# parameter_source=state_predictor, the resolved predictor response parameters
+# are copied even when delay prediction itself is inactive.
+velocity_response_compensation:
+  enabled: false
+  parameter_source: state_predictor
+  tau_s: 0.0
+  gain: 1.0
+  bias: 0.0
+  max_abs_velocity: 0.0

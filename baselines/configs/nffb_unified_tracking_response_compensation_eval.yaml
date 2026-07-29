@@ -1,4 +1,4 @@
-env_config: environments/configs/unified_tracking_constant_response_d0.yaml
+env_config: environments/configs/unified_tracking_mixed.yaml
 policy_config: baselines/configs/nffb_sine_phase0_acc5.yaml
 
 # D=0 response compensation remains independent of delay prediction. Response
@@ -11,9 +11,11 @@ policy_overrides:
     max_acc: auto
     max_velocity: auto
     velocity_response_enabled: true
-    velocity_response_tau_s: auto
-    velocity_response_gain: auto
-    velocity_response_bias: auto
+    # The mixed environment randomizes the target response per environment;
+    # use the range midpoint as the deterministic nominal inverse model.
+    velocity_response_tau_s: 0.155
+    velocity_response_gain: 0.86
+    velocity_response_bias: -0.0035
     velocity_response_max_abs_velocity: auto
   velocity_response_compensation:
     enabled: true
