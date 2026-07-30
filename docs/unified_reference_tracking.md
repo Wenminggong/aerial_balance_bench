@@ -272,6 +272,38 @@ predictor horizon. Full
 `reference_preview` plus predictor remains unsupported, and `rl_train.py`
 continues to reject every active predictor.
 
+### Asymmetric velocity-response adaptation
+
+The optional adaptive RL input adds a separate history after the configured RL
+adapter output. For per-channel history length `H_r`, decision `t` receives
+
+```text
+[vrz[t-H_r:t-1], command_z[t-H_r:t-1]]
+```
+
+with both channels in oldest-to-newest order. Reset histories are zero padded. The training
+wrapper updates only non-terminal environments after each transition; the
+deployment policy skips reset metadata once, so terminal `extras["step"]` are
+never paired with an autoreset observation. The raw environment observation and
+its 11-D legacy prefix remain unchanged.
+
+The actor owns `z = encoder(vrz_history, command_z_history)` and sends
+`[base_policy_input, z]` to its head. The separate critic bypasses the encoder
+and consumes `[base_policy_input, velocity_response_tau_s,
+velocity_response_gain, velocity_response_bias]`; no OU-noise parameter is
+privileged. Both models use one optimizer, but only the policy loss can update
+the encoder. The defaults `H_r=30`, `latent_dim=8`, and encoder MLP `[64, 32]`
+produce a 92-D skrl transport state, an 89-D actor-visible input, a 37-D actor
+head input, and a 32-D critic input. During evaluation the three privileged
+slots are zero and are ignored by the actor.
+
+The wrapper reads privileged parameters from the robustness manager after
+autoreset, rather than using terminal extras from the preceding episode. This
+v2 implementation requires `interface_name: velocity`, effective
+action delay `D=0`, and an inactive state predictor. The latent is trained only
+through the RL objective and is not required to identify physical
+`tau/gain/bias` values.
+
 ### Autoreset timing
 
 At a terminal step, evaluator aggregation and `extras["step"]` describe the episode that just ended. Isaac Lab then resets completed environments and returns an observation for each new episode. Consumers must not combine a terminal step's task parameters from `extras` with the autoreset observation as though they belonged to one episode.
@@ -319,9 +351,13 @@ initial_ball_position
 | `baselines/configs/rl_rpo_reference_preview_eval.yaml` | Deterministic preview-policy evaluation template. |
 | `baselines/configs/rl_rpo_relative_reference_preview_train.yaml` | RPO training policy using the 29-D relative sampled preview. |
 | `baselines/configs/rl_rpo_relative_reference_preview_eval.yaml` | Deterministic relative-preview evaluation template. |
+| `baselines/configs/rl_rpo_relative_reference_preview_adaptive_train.yaml` | Asymmetric adaptive RPO training policy. |
+| `baselines/configs/rl_rpo_relative_reference_preview_adaptive_eval.yaml` | Asymmetric adaptive deterministic evaluation policy. |
 | `baselines/configs/rl_rpo_relative_reference_preview_predictor_eval.yaml` | Deterministic relative-preview evaluation with the delay predictor active. |
 | `baselines/configs/rl_unified_tracking_rpo_train.yaml` | Complete mixed RPO training run. |
 | `baselines/configs/rl_unified_tracking_rpo_eval.yaml` | Complete RL evaluation run; switch singleton env with `--env_config`. |
+| `baselines/configs/rl_unified_tracking_rpo_adaptive_train.yaml` | Complete mixed asymmetric-adaptive RPO training run. |
+| `baselines/configs/rl_unified_tracking_rpo_adaptive_eval.yaml` | Complete asymmetric-adaptive evaluation run. |
 | `baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml` | Complete compensated RL evaluation run for `D=8`, raw `H=38`. |
 | `baselines/configs/cpid_unified_tracking_eval.yaml` | Unchanged CPID evaluation on the mixed task; switch singleton env with `--env_config`. |
 | `baselines/configs/cpid_unified_tracking_predictor_eval.yaml` | CPID with an eight-step response-aware predictor and aligned reference preview. |
@@ -490,6 +526,27 @@ For a short construction/shape check, override `--num_envs 4 --max_iterations 1`
 Training uses `D=0`, `H=30`, and `K=10`; an active state predictor is rejected
 by the training entry point.
 
+The asymmetric adaptive variant uses the same environment distribution:
+
+```bash
+python3 scripts/rl_train.py \
+  --config baselines/configs/rl_unified_tracking_rpo_adaptive_train.yaml \
+  --num_envs 1024 \
+  --max_iterations 300 \
+  --headless
+```
+
+Each adaptive v2 save retains a complete agent checkpoint with separate policy
+and value modules and exports actor/critic-head and encoder components.
+Component evaluation uses
+`baselines/configs/rl_unified_tracking_rpo_adaptive_eval.yaml` with
+`--actor_critic_checkpoint` and `--encoder_checkpoint`. Both files carry the
+input-contract metadata; mismatched history, latent, encoder, observation mode,
+field order, or component-pair identifier is rejected before rollout. The
+encoder file also stores the history normalizer slice for standalone
+raw `(batch, 2H)` history inference. Shared-encoder adaptive v1 checkpoints are
+rejected and are not migrated automatically.
+
 ### Per-type RL evaluation
 
 Use the same preview checkpoint for every singleton config:
@@ -543,7 +600,7 @@ Use a new logging root/run name when changing metric schemas or experimental dis
 | --- | --- | --- | --- |
 | Environment | Unchanged | Supported | Optional; disabled by default |
 | Zero-action runner | Supported | Supported | Supported |
-| RL train/eval | Supported as before | Supported with velocity interface | `relative_reference_preview`, `reference_preview`, `legacy8`, and `full11` adapters supported |
+| RL train/eval | Supported as before | Supported with velocity interface; optional asymmetric response adaptation requires `D=0` | `relative_reference_preview`, `reference_preview`, `legacy8`, and `full11` adapters supported |
 | Existing RL checkpoints | Unchanged with their original mode/config | Not automatically transferable | Full preview requires matching raw `H`; relative preview requires matching effective `H`, `K`, offsets, and fields |
 | CPID runner/policy | Supported for its existing task paths | Supported by the dedicated unified runner | Future positions consumed only by an active predictor |
 | NMPC runner/policy | Supported for its existing task paths | Not supported | Not modified |

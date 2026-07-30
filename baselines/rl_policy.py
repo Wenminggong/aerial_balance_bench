@@ -12,15 +12,29 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
-from .base_policy import BasePolicy, BasePolicyCfg
+from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
 from .model_state_predictor import (
     VelocityModelStatePredictor,
     VelocityModelStatePredictorCfg,
     extract_reference_positions,
     validate_reference_preview_horizon,
 )
-from .rl_models import MLPNetworkCfg, make_agent_class_and_cfg, make_models
+from .rl_models import (
+    AdaptiveVelocityActor,
+    MLPNetworkCfg,
+    configure_adaptive_agent_checkpointing,
+    load_adaptive_agent_components,
+    make_agent_class_and_cfg,
+    make_models,
+    validate_adaptive_agent_checkpoint,
+)
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
+from .velocity_response_adaptation import (
+    PRIVILEGED_RESPONSE_FIELDS,
+    VelocityResponseAdaptationCfg,
+    VelocityResponseHistoryBuffer,
+    adaptive_checkpoint_metadata,
+)
 
 
 @dataclass
@@ -32,12 +46,17 @@ class RLPolicyCfg(BasePolicyCfg):
     observation_mode: str = "legacy8"
     reference_preview_samples: int | None = None
     checkpoint_path: str | None = None
+    actor_critic_checkpoint_path: str | None = None
+    encoder_checkpoint_path: str | None = None
     load_checkpoint: bool = True
     deterministic: bool = True
     physical_action_limit: float | str = "auto"
     network: MLPNetworkCfg = field(default_factory=MLPNetworkCfg)
     agent: dict[str, Any] = field(default_factory=dict)
     state_predictor: VelocityModelStatePredictorCfg = field(default_factory=VelocityModelStatePredictorCfg)
+    velocity_response_adaptation: VelocityResponseAdaptationCfg = field(
+        default_factory=VelocityResponseAdaptationCfg
+    )
 
     @classmethod
     def from_dict(cls, data: Mapping | None) -> "RLPolicyCfg":
@@ -60,6 +79,16 @@ class RLPolicyCfg(BasePolicyCfg):
         if "checkpoint_path" in policy_data:
             checkpoint_path = policy_data["checkpoint_path"]
             cfg.checkpoint_path = None if checkpoint_path in (None, "null", "") else str(checkpoint_path)
+        if "actor_critic_checkpoint_path" in policy_data:
+            checkpoint_path = policy_data["actor_critic_checkpoint_path"]
+            cfg.actor_critic_checkpoint_path = (
+                None if checkpoint_path in (None, "null", "") else str(checkpoint_path)
+            )
+        if "encoder_checkpoint_path" in policy_data:
+            checkpoint_path = policy_data["encoder_checkpoint_path"]
+            cfg.encoder_checkpoint_path = (
+                None if checkpoint_path in (None, "null", "") else str(checkpoint_path)
+            )
         if "load_checkpoint" in policy_data:
             cfg.load_checkpoint = bool(policy_data["load_checkpoint"])
         if "deterministic" in policy_data:
@@ -70,6 +99,9 @@ class RLPolicyCfg(BasePolicyCfg):
         cfg.network = MLPNetworkCfg.from_dict(policy_data.get("network", policy_data.get("model", {})))
         cfg.agent = dict(policy_data.get("agent", {}))
         cfg.state_predictor = VelocityModelStatePredictorCfg.from_dict(policy_data.get("state_predictor", {}))
+        cfg.velocity_response_adaptation = VelocityResponseAdaptationCfg.from_dict(
+            policy_data.get("velocity_response_adaptation", {})
+        )
         return cfg
 
 
@@ -192,6 +224,11 @@ class RLPolicy(BasePolicy):
 
         self._resolve_predictor_cfg_defaults()
         self.state_predictor = VelocityModelStatePredictor(cfg.state_predictor, num_envs, self.device)
+        cfg.velocity_response_adaptation.validate()
+        if cfg.velocity_response_adaptation.enabled and self.state_predictor.active:
+            raise ValueError(
+                "velocity_response_adaptation cannot be combined with an active state predictor."
+            )
         observation_mode = str(cfg.observation_mode).lower()
         reference_preview_base_offset = (
             self.state_predictor.delay_step
@@ -217,6 +254,38 @@ class RLPolicy(BasePolicy):
                 "preview compensation, or disable the state predictor."
             )
 
+        self.base_policy_input_dim = self.observation_adapter.input_dim
+        self.response_history: VelocityResponseHistoryBuffer | None = None
+        if cfg.velocity_response_adaptation.enabled:
+            self.response_history = VelocityResponseHistoryBuffer(
+                num_envs,
+                cfg.velocity_response_adaptation.history_length,
+                self.device,
+            )
+        adaptation_dim = (
+            cfg.velocity_response_adaptation.encoder_input_dim
+            + len(PRIVILEGED_RESPONSE_FIELDS)
+            if cfg.velocity_response_adaptation.enabled
+            else 0
+        )
+        self.model_input_dim = self.base_policy_input_dim + adaptation_dim
+        self.policy_input_fields = (
+            *self.observation_adapter.field_names,
+            *(
+                cfg.velocity_response_adaptation.history_field_names
+                if cfg.velocity_response_adaptation.enabled
+                else ()
+            ),
+            *(PRIVILEGED_RESPONSE_FIELDS if cfg.velocity_response_adaptation.enabled else ()),
+        )
+        # Privileged dynamics are training-only. Keep zero placeholders during
+        # deployment so full asymmetric agent checkpoints retain one state shape.
+        self.privileged_response_parameters = torch.zeros(
+            (self.num_envs, len(PRIVILEGED_RESPONSE_FIELDS)),
+            device=self.device,
+            dtype=torch.float32,
+        )
+
         self.normalized_action_space = spaces.Box(
             low=np.array([-1.0], dtype=np.float32),
             high=np.array([1.0], dtype=np.float32),
@@ -225,7 +294,7 @@ class RLPolicy(BasePolicy):
         self.policy_observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(self.observation_adapter.input_dim,),
+            shape=(self.model_input_dim,),
             dtype=np.float32,
         )
         self.models = make_models(
@@ -234,12 +303,15 @@ class RLPolicy(BasePolicy):
             self.policy_observation_space,
             self.normalized_action_space,
             self.device,
+            adaptation_cfg=cfg.velocity_response_adaptation,
+            base_observation_dim=self.base_policy_input_dim,
         )
         agent_cls, agent_cfg = make_agent_class_and_cfg(
             cfg.algorithm,
             cfg.agent,
             self.policy_observation_space,
             self.device,
+            adaptive_checkpointing=cfg.velocity_response_adaptation.enabled,
         )
         agent_cfg.setdefault("experiment", {})
         agent_cfg["experiment"]["wandb"] = False
@@ -252,17 +324,72 @@ class RLPolicy(BasePolicy):
             action_space=self.normalized_action_space,
             device=self.device,
         )
+        self.adaptive_checkpoint_metadata: dict[str, Any] | None = None
+        if cfg.velocity_response_adaptation.enabled:
+            self.adaptive_checkpoint_metadata = adaptive_checkpoint_metadata(
+                algorithm=cfg.algorithm,
+                observation_mode=self.observation_mode,
+                base_input_dim=self.base_policy_input_dim,
+                total_input_dim=self.model_input_dim,
+                input_fields=self.policy_input_fields,
+                adaptation_cfg=cfg.velocity_response_adaptation,
+            )
+            configure_adaptive_agent_checkpointing(
+                self.agent,
+                self.adaptive_checkpoint_metadata,
+            )
         if cfg.load_checkpoint:
-            if not cfg.checkpoint_path:
-                raise ValueError("RLPolicyCfg.load_checkpoint=True requires checkpoint_path.")
+            component_paths = (
+                cfg.actor_critic_checkpoint_path,
+                cfg.encoder_checkpoint_path,
+            )
+            component_loading = any(component_paths)
+            if component_loading and not all(component_paths):
+                raise ValueError(
+                    "Adaptive component loading requires both actor_critic_checkpoint_path "
+                    "and encoder_checkpoint_path."
+                )
+            if component_loading and cfg.checkpoint_path:
+                raise ValueError(
+                    "checkpoint_path is mutually exclusive with adaptive component checkpoint paths."
+                )
+            if component_loading and not cfg.velocity_response_adaptation.enabled:
+                raise ValueError(
+                    "Adaptive component checkpoints require velocity_response_adaptation.enabled=True."
+                )
+            if not component_loading and not cfg.checkpoint_path:
+                raise ValueError(
+                    "RLPolicyCfg.load_checkpoint=True requires checkpoint_path or both adaptive "
+                    "component checkpoint paths."
+                )
             try:
-                self.agent.load(str(Path(cfg.checkpoint_path).expanduser()))
+                if component_loading:
+                    assert self.adaptive_checkpoint_metadata is not None
+                    load_adaptive_agent_components(
+                        self.agent,
+                        str(Path(cfg.actor_critic_checkpoint_path).expanduser()),
+                        str(Path(cfg.encoder_checkpoint_path).expanduser()),
+                        self.adaptive_checkpoint_metadata,
+                    )
+                else:
+                    if cfg.velocity_response_adaptation.enabled:
+                        assert self.adaptive_checkpoint_metadata is not None
+                        validate_adaptive_agent_checkpoint(
+                            str(Path(cfg.checkpoint_path).expanduser()),
+                            self.adaptive_checkpoint_metadata,
+                            self.device,
+                        )
+                    self.agent.load(str(Path(cfg.checkpoint_path).expanduser()))
             except Exception as exc:
                 preview_horizon = self.observation_adapter.reference_preview_future_steps
                 raise RuntimeError(
                     f"Failed to load RL checkpoint for observation_mode='{self.observation_mode}', "
                     f"raw_observation_dim={self.observation_adapter.raw_observation_dim}, "
-                    f"policy_input_dim={self.observation_adapter.input_dim}, "
+                    f"base_policy_input_dim={self.observation_adapter.input_dim}, "
+                    f"model_input_dim={self.model_input_dim}, "
+                    "velocity_response_history_length="
+                    f"{cfg.velocity_response_adaptation.history_length}, "
+                    f"velocity_response_latent_dim={cfg.velocity_response_adaptation.latent_dim}, "
                     f"raw_preview_future_steps={preview_horizon}, "
                     "reference_preview_base_offset="
                     f"{self.observation_adapter.reference_preview_base_offset}, "
@@ -276,9 +403,13 @@ class RLPolicy(BasePolicy):
                 ) from exc
 
         self.timestep = 0
-        self.policy_input = torch.zeros((self.num_envs, self.observation_adapter.input_dim), device=self.device)
+        self.policy_input = torch.zeros((self.num_envs, self.model_input_dim), device=self.device)
         self.normalized_action = torch.zeros((self.num_envs, 1), device=self.device)
         self.physical_action = torch.zeros((self.num_envs, 1), device=self.device)
+        self.velocity_response_latent = torch.zeros(
+            (self.num_envs, cfg.velocity_response_adaptation.latent_dim),
+            device=self.device,
+        ) if cfg.velocity_response_adaptation.enabled else None
 
     @property
     def observation_mode(self) -> str:
@@ -291,21 +422,28 @@ class RLPolicy(BasePolicy):
             return
         self.observation_adapter.reset(env_ids)
         self.state_predictor.reset(env_ids)
+        if self.response_history is not None:
+            self.response_history.reset(env_ids)
         self.normalized_action[env_ids] = 0.0
         self.physical_action[env_ids] = 0.0
         self.policy_input[env_ids] = 0.0
+        self.privileged_response_parameters[env_ids] = 0.0
+        if self.velocity_response_latent is not None:
+            self.velocity_response_latent[env_ids] = 0.0
         if env_ids.numel() == self.num_envs:
             self.timestep = 0
 
     def act(self, observations: dict[str, torch.Tensor] | torch.Tensor, extras: dict | None = None) -> torch.Tensor:
         """Compute a physical velocity-increment action from environment observations."""
-        del extras
         raw_obs = self._extract_policy_observation(observations)
         if raw_obs.ndim != 2 or raw_obs.shape[0] != self.num_envs or raw_obs.shape[1] < 11:
             raise ValueError(
                 f"RLPolicy expects observation shape ({self.num_envs}, D) with D >= 11, "
                 f"got {tuple(raw_obs.shape)}."
             )
+
+        if self.response_history is not None:
+            self._update_response_history(raw_obs, extras)
 
         reference_positions = self._extract_reference_positions(raw_obs)
         model_legacy_obs = self.state_predictor.predict(
@@ -319,13 +457,33 @@ class RLPolicy(BasePolicy):
             model_obs = torch.cat((model_legacy_obs, raw_obs[:, 11:]), dim=-1)
         else:
             model_obs = model_legacy_obs
-        self.policy_input.copy_(self.observation_adapter.transform(model_obs, update_history=True))
+        base_policy_input = self.observation_adapter.transform(model_obs, update_history=True)
+        if self.response_history is not None:
+            model_input = torch.cat(
+                (
+                    base_policy_input,
+                    self.response_history.encoder_input,
+                    self.privileged_response_parameters,
+                ),
+                dim=-1,
+            )
+        else:
+            model_input = base_policy_input
+        self.policy_input.copy_(model_input)
 
         outputs = self.agent.act(self.policy_input, timestep=self.timestep, timesteps=self.timestep)
         action, info = self._select_normalized_action(outputs)
         del info
         self.normalized_action.copy_(torch.clamp(action, -1.0, 1.0))
         self.physical_action.copy_(self.normalized_action * self.physical_action_limit)
+        adaptive_model = self.models.get("policy")
+        if isinstance(adaptive_model, AdaptiveVelocityActor):
+            if adaptive_model.last_latent.shape != self.velocity_response_latent.shape:
+                raise RuntimeError(
+                    "Adaptive actor returned an unexpected latent shape: "
+                    f"{tuple(adaptive_model.last_latent.shape)}."
+                )
+            self.velocity_response_latent.copy_(adaptive_model.last_latent)
         self.state_predictor.update_after_action(self.physical_action)
         self.timestep += 1
         return self.physical_action.clone()
@@ -338,6 +496,22 @@ class RLPolicy(BasePolicy):
             **self.observation_adapter.get_state(),
             **self.state_predictor.get_state(),
         }
+        if self.response_history is not None:
+            state.update(
+                {
+                    "policy_velocity_response_error": self.response_history.latest_error,
+                    "policy_velocity_response_actual_history": (
+                        self.response_history.actual_velocity_history
+                    ),
+                    "policy_velocity_response_command_history": (
+                        self.response_history.commanded_velocity_history
+                    ),
+                    "policy_velocity_response_error_history": (
+                        self.response_history.error_history
+                    ),
+                    "policy_velocity_response_latent": self.velocity_response_latent,
+                }
+            )
         return state
 
     def to(self, device: str | torch.device):
@@ -347,8 +521,51 @@ class RLPolicy(BasePolicy):
                 setattr(self, name, value.to(device=device))
         self.observation_adapter.to(device)
         self.state_predictor.to(device)
+        if self.response_history is not None:
+            self.response_history.to(device)
         self.device = device
         return self
+
+    def _update_response_history(
+        self,
+        raw_obs: torch.Tensor,
+        extras: dict | None,
+    ) -> None:
+        assert self.response_history is not None
+        boundary_mask = self.response_history.needs_transition.clone()
+        update_env_ids = (~boundary_mask).nonzero(as_tuple=False).squeeze(-1)
+        boundary_env_ids = boundary_mask.nonzero(as_tuple=False).squeeze(-1)
+        if update_env_ids.numel() > 0:
+            if not isinstance(extras, Mapping):
+                raise ValueError(
+                    "velocity_response_adaptation requires extras['step']['command_z'] "
+                    "after the reset observation."
+                )
+            step_extras = extras.get("step")
+            if not isinstance(step_extras, Mapping) or "command_z" not in step_extras:
+                raise ValueError(
+                    "velocity_response_adaptation requires extras['step']['command_z']."
+                )
+            command_z = torch.as_tensor(
+                step_extras["command_z"],
+                device=self.device,
+                dtype=torch.float32,
+            )
+            if command_z.ndim == 2 and command_z.shape[-1] == 1:
+                command_z = command_z[:, 0]
+            if command_z.shape != (self.num_envs,):
+                raise ValueError(
+                    "extras['step']['command_z'] must have shape "
+                    f"({self.num_envs},), got {tuple(command_z.shape)}."
+                )
+            measured_vrz = raw_obs[:, ObservationIndex.VRZ]
+            self.response_history.update(
+                measured_vrz[update_env_ids],
+                command_z[update_env_ids],
+                update_env_ids,
+            )
+        if boundary_env_ids.numel() > 0:
+            self.response_history.mark_transition_boundary(boundary_env_ids)
 
     def _extract_reference_positions(self, raw_obs: torch.Tensor) -> torch.Tensor | None:
         if not self.state_predictor.active:

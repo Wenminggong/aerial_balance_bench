@@ -126,6 +126,33 @@ reference_preview_samples: 10
 
 Without delay compensation, this mode requires `H >= K` and `H % K == 0`. It samples offsets `H/K, 2H/K, ..., H` and produces `[pb-pg_0, vb-vg_0, ab, theta, omega, alpha, vrz, arz, a_prev, delta_pg_1:K, delta_vg_1:K]`. With `H = 30` and `K = 10`, the sampled offsets are `3, 6, ..., 30` and the policy input has 29 dimensions. Predictor-enabled evaluation retains this field layout by using raw `H=38`, base offset `D=8`, and effective horizon `H-D=30`.
 
+An optional asymmetric adaptive RL model conditions the actor on measured and
+commanded velocity histories while giving the critic the true first-order
+response parameters during training:
+
+```yaml
+velocity_response_adaptation:
+  enabled: true
+  history_length: 30
+  latent_dim: 8
+  encoder:
+    hidden_dims: [64, 32]
+    activation: relu
+```
+
+Here `history_length` is the length of each channel. At decision time the actor
+encoder receives `[vrz_(t-H:t-1), command_z_(t-H:t-1)]`, with each channel in
+oldest-to-newest order, and the actor head consumes `[base_input, z]`. The
+critic does not use the encoder or histories; it consumes
+`[base_input, tau_s, gain, bias]`. OU-noise parameters are deliberately
+excluded. With the default relative preview, the skrl transport state has 92
+dimensions, the actor-visible input has 89, the actor head has 37, and the
+critic has 32. Evaluation retains the 92-D transport contract with three zero
+privileged placeholders that the actor strictly ignores. Reset histories are
+zero padded, and post-autoreset response parameters are read from the current
+environment state. This v2 contract requires the velocity interface, effective
+action delay `D=0`, and an inactive state predictor.
+
 ### Rewards and termination
 
 Target-position balancing uses a regulation reward with object terms, control effort terms, a failure penalty, and a near-goal bonus:
@@ -593,6 +620,40 @@ python3 scripts/rl_train.py \
   --headless
 ```
 
+Train the asymmetric adaptive variant on the same randomized velocity
+response distribution:
+
+```bash
+python3 scripts/rl_train.py \
+  --config baselines/configs/rl_unified_tracking_rpo_adaptive_train.yaml \
+  --num_envs 1024 \
+  --max_iterations 300 \
+  --headless
+```
+
+Adaptive runs retain complete `agent_*.pt` checkpoints and additionally write
+`adaptive_actor_critic_heads_*.pt` and
+`velocity_response_encoder_*.pt`. Each component pair has a shared identifier,
+so files from different saves cannot be mixed accidentally. Evaluate either the
+complete checkpoint with `--checkpoint`, or the separate components:
+
+```bash
+python3 scripts/rl_policy_eval.py \
+  --config baselines/configs/rl_unified_tracking_rpo_adaptive_eval.yaml \
+  --actor_critic_checkpoint /path/to/adaptive_actor_critic_heads_best.pt \
+  --encoder_checkpoint /path/to/velocity_response_encoder_best.pt \
+  --episodes 10 \
+  --num_envs 10 \
+  --headless
+```
+
+The encoder component includes both history slices of the training input
+normalizer and can be loaded independently with
+`load_velocity_response_encoder(path)` to map raw `(batch, 2H)` histories to z;
+an expected metadata contract may be supplied for exact compatibility checks.
+Adaptive v1 checkpoints used a shared encoder and are intentionally rejected;
+there is no automatic migration to the asymmetric v2 architecture.
+
 RL training still requires the state predictor to be disabled. During
 evaluation/deployment, `relative_reference_preview` can be combined with an
 active predictor when the predictor and environment delays match and the raw
@@ -733,7 +794,7 @@ parameters, or the low-level flight dynamics.
 | Cascaded PID | `baselines/cpid_policy.py`, `baselines/configs/cpid.yaml` | Outer-loop incremental PID generates a beam-angle reference from ball-position error; inner-loop incremental PID generates a vertical-velocity increment. |
 | NFFB | `baselines/nffb_policy.py`, `baselines/configs/nffb.yaml` | Combines discrete reference-acceleration feedforward and ball-tracking feedback, inverts the nonlinear ball dynamics, filters the beam-angle command, and applies exact rope--beam geometric inversion. |
 | NMPC | `baselines/nmpc_policy.py`, `baselines/nmpc_core.py`, `baselines/configs/nmpc.yaml` | Solves a nonlinear optimal control problem over velocity-interface dynamics using do-mpc/CasADi. |
-| RL/RPO | `baselines/rl_policy.py`, `baselines/rl_models.py`, `baselines/configs/rl_rpo.yaml` | Uses skrl RPO/PPO-compatible MLP actor-critic models; the default policy uses an 8-D adapted observation. |
+| RL/RPO | `baselines/rl_policy.py`, `baselines/rl_models.py`, `baselines/configs/rl_rpo.yaml` | Uses skrl RPO/PPO-compatible MLP actor-critic models; the optional asymmetric variant gives only the actor a velocity-history encoder and gives the critic true `tau/gain/bias` parameters during training. |
 
 ### Simulation results
 

@@ -89,9 +89,20 @@ import numpy as np
 import torch
 
 from aerial_balance_bench.baselines.rl_env_wrapper import NormalizedRLTrainingWrapper
-from aerial_balance_bench.baselines.rl_models import make_agent_class_and_cfg, make_models, require_skrl
+from aerial_balance_bench.baselines.rl_models import (
+    configure_adaptive_agent_checkpointing,
+    export_adaptive_agent_components,
+    make_agent_class_and_cfg,
+    make_models,
+    require_skrl,
+)
 from aerial_balance_bench.baselines.rl_observation_adapter import RLObservationAdapterCfg
 from aerial_balance_bench.baselines.rl_policy import RLPolicyCfg
+from aerial_balance_bench.baselines.velocity_response_adaptation import (
+    PRIVILEGED_RESPONSE_FIELDS,
+    adaptive_checkpoint_metadata,
+    validate_velocity_response_adaptation_environment,
+)
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
 from aerial_balance_bench.utils.io import ensure_dir, save_yaml
 
@@ -249,6 +260,16 @@ def main():
             "state_predictor. "
             "Disable state_predictor for unified tracking training."
         )
+    validate_velocity_response_adaptation_environment(
+        policy_cfg.velocity_response_adaptation,
+        interface_name=env_cfg.interface_name,
+        robustness_enabled=bool(env_cfg.robustness.enabled),
+        action_delay_enabled=bool(env_cfg.robustness.action_delay_enabled),
+        delay_step=int(env_cfg.robustness.delay_step),
+        delay_step_choices=env_cfg.robustness.delay_step_choices,
+        predictor_active=bool(policy_cfg.state_predictor.enabled and int(predictor_delay_step) > 0),
+        context="RL training velocity-response adaptation",
+    )
     train_cfg = run_config.get("training", {})
     max_iterations = int(args_cli.max_iterations if args_cli.max_iterations is not None else train_cfg.get("max_iterations", 200))
 
@@ -282,6 +303,7 @@ def main():
             physical_action_limit,
             raw_observation_dim=base_env.raw_observation_dim,
             raw_observation_fields=base_env.observation_fields,
+            adaptation_cfg=policy_cfg.velocity_response_adaptation,
         )
         skrl_env = wrap_env(env=train_env, wrapper="isaaclab", verbose=True)
 
@@ -329,6 +351,7 @@ def main():
             default_overrides,
             skrl_env.observation_space,
             skrl_env.device,
+            adaptive_checkpointing=policy_cfg.velocity_response_adaptation.enabled,
         )
         models = make_models(
             policy_cfg.algorithm,
@@ -336,6 +359,8 @@ def main():
             skrl_env.observation_space,
             skrl_env.action_space,
             skrl_env.device,
+            adaptation_cfg=policy_cfg.velocity_response_adaptation,
+            base_observation_dim=train_env.base_policy_observation_dim,
         )
         agent = agent_cls(
             models=models,
@@ -345,6 +370,17 @@ def main():
             action_space=skrl_env.action_space,
             device=skrl_env.device,
         )
+        adaptive_metadata = None
+        if policy_cfg.velocity_response_adaptation.enabled:
+            adaptive_metadata = adaptive_checkpoint_metadata(
+                algorithm=policy_cfg.algorithm,
+                observation_mode=policy_cfg.observation_mode,
+                base_input_dim=train_env.base_policy_observation_dim,
+                total_input_dim=train_env.policy_observation_dim,
+                input_fields=train_env.policy_observation_fields,
+                adaptation_cfg=policy_cfg.velocity_response_adaptation,
+            )
+            configure_adaptive_agent_checkpointing(agent, adaptive_metadata)
         trainer_cfg = {
             "timesteps": int(train_cfg.get("timesteps", max_iterations * base_env.max_episode_length)),
             "headless": bool(args_cli.headless),
@@ -362,8 +398,39 @@ def main():
                 "observation_mode": policy_cfg.observation_mode,
                 "raw_observation_dim": base_env.raw_observation_dim,
                 "observation_fields": list(base_env.observation_fields),
-                "policy_input_dim": train_env.adapter.input_dim,
-                "policy_input_fields": list(train_env.adapter.field_names),
+                "base_policy_input_dim": train_env.base_policy_observation_dim,
+                "base_policy_input_fields": list(train_env.base_policy_observation_fields),
+                "policy_input_dim": train_env.policy_observation_dim,
+                "policy_input_fields": list(train_env.policy_observation_fields),
+                "velocity_response_adaptation": policy_cfg.velocity_response_adaptation.to_dict(),
+                "velocity_response_encoder_input_dim": (
+                    policy_cfg.velocity_response_adaptation.encoder_input_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else None
+                ),
+                "velocity_response_latent_dim": (
+                    policy_cfg.velocity_response_adaptation.latent_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else None
+                ),
+                "actor_observation_dim": (
+                    train_env.base_policy_observation_dim
+                    + policy_cfg.velocity_response_adaptation.encoder_input_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else train_env.policy_observation_dim
+                ),
+                "actor_head_input_dim": (
+                    train_env.base_policy_observation_dim
+                    + policy_cfg.velocity_response_adaptation.latent_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else train_env.policy_observation_dim
+                ),
+                "critic_input_dim": (
+                    train_env.base_policy_observation_dim
+                    + len(PRIVILEGED_RESPONSE_FIELDS)
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else train_env.policy_observation_dim
+                ),
                 "reference_preview_enabled": env_cfg.reference_preview.enabled,
                 "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
                 "reference_preview_offsets": list(base_env.reference_preview_offsets),
@@ -394,6 +461,12 @@ def main():
         start_time = time.perf_counter()
         trainer.train()
         elapsed_s = time.perf_counter() - start_time
+        if adaptive_metadata is not None:
+            export_adaptive_agent_components(
+                agent,
+                output_dir / "checkpoints",
+                "final",
+            )
         save_yaml({"training_elapsed_s": elapsed_s}, output_dir / "training_time.yaml")
         print(f"[INFO] RL training finished. Logs saved to: {output_dir}")
     finally:

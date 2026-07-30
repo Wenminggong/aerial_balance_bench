@@ -1,6 +1,7 @@
 policy_name: rl
 algorithm: rpo
-observation_mode: legacy8
+observation_mode: relative_reference_preview
+reference_preview_samples: 10
 checkpoint_path: null
 actor_critic_checkpoint_path: null
 encoder_checkpoint_path: null
@@ -42,13 +43,13 @@ state_predictor:
   plank_length: auto
   rope_length: auto
   gravity: auto
-  ball_mass: 0.0005
+  ball_mass: auto
   ball_radius: auto
   ball_inertia_ratio: 0.4
-  epsilon: 1.0e-9
+  epsilon: 1.0e-6
 
 velocity_response_adaptation:
-  enabled: false
+  enabled: true
   # Per-channel length; the encoder input is [vrz_history, command_z_history] with 2H values.
   history_length: 30
   latent_dim: 8

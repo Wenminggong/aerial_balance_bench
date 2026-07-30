@@ -8,7 +8,13 @@ import numpy as np
 import torch
 from gymnasium import Wrapper, spaces
 
+from .base_policy import ObservationIndex
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
+from .velocity_response_adaptation import (
+    PRIVILEGED_RESPONSE_FIELDS,
+    VelocityResponseAdaptationCfg,
+    VelocityResponseHistoryBuffer,
+)
 
 
 class NormalizedRLTrainingWrapper(Wrapper):
@@ -21,6 +27,7 @@ class NormalizedRLTrainingWrapper(Wrapper):
         physical_action_limit: float,
         raw_observation_dim: int | None = None,
         raw_observation_fields: Sequence[str] | None = None,
+        adaptation_cfg: VelocityResponseAdaptationCfg | None = None,
     ):
         super().__init__(env)
         self.physical_action_limit = float(physical_action_limit)
@@ -41,8 +48,33 @@ class NormalizedRLTrainingWrapper(Wrapper):
         )
         self.raw_observation_dim = self.adapter.raw_observation_dim
         self.raw_observation_fields = self.adapter.raw_observation_fields
-        self.policy_observation_dim = self.adapter.input_dim
-        self.policy_observation_fields = self.adapter.field_names
+        self.adaptation_cfg = adaptation_cfg or VelocityResponseAdaptationCfg()
+        self.adaptation_cfg.validate()
+        self.base_policy_observation_dim = self.adapter.input_dim
+        self.base_policy_observation_fields = self.adapter.field_names
+        self.response_history: VelocityResponseHistoryBuffer | None = None
+        self.privileged_response_parameters = torch.zeros(
+            (base_env.num_envs, len(PRIVILEGED_RESPONSE_FIELDS)),
+            device=base_env.device,
+            dtype=torch.float32,
+        )
+        if self.adaptation_cfg.enabled:
+            self.response_history = VelocityResponseHistoryBuffer(
+                base_env.num_envs,
+                self.adaptation_cfg.history_length,
+                base_env.device,
+            )
+        adaptation_dim = (
+            self.adaptation_cfg.encoder_input_dim + len(PRIVILEGED_RESPONSE_FIELDS)
+            if self.adaptation_cfg.enabled
+            else 0
+        )
+        self.policy_observation_dim = self.base_policy_observation_dim + adaptation_dim
+        self.policy_observation_fields = (
+            *self.base_policy_observation_fields,
+            *(self.adaptation_cfg.history_field_names if self.adaptation_cfg.enabled else ()),
+            *(PRIVILEGED_RESPONSE_FIELDS if self.adaptation_cfg.enabled else ()),
+        )
 
         self.action_space = spaces.Box(
             low=np.array([-1.0], dtype=np.float32),
@@ -52,7 +84,7 @@ class NormalizedRLTrainingWrapper(Wrapper):
         policy_observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(self.adapter.input_dim,),
+            shape=(self.policy_observation_dim,),
             dtype=np.float32,
         )
         # skrl's IsaacLab wrapper reads observation spaces from
@@ -84,10 +116,13 @@ class NormalizedRLTrainingWrapper(Wrapper):
     def reset(self, **kwargs):
         observations, infos = self.env.reset(**kwargs)
         self.adapter.reset()
+        if self.response_history is not None:
+            self.response_history.reset()
+            self._refresh_privileged_response_parameters()
         self.last_normalized_action.zero_()
         self.last_physical_action.zero_()
         self._copy_benchmark_metrics_to_episode_info(infos)
-        return {"policy": self.adapter.transform(observations["policy"], update_history=True)}, infos
+        return {"policy": self._adapt_observation(observations["policy"])}, infos
 
     def step(self, action):
         if torch.is_tensor(action):
@@ -101,18 +136,109 @@ class NormalizedRLTrainingWrapper(Wrapper):
         observations, rewards, terminated, truncated, infos = self.env.step(physical_action)
 
         done_env_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
+        if self.response_history is not None:
+            active_env_ids = (~(terminated | truncated)).nonzero(as_tuple=False).squeeze(-1)
+            if active_env_ids.numel() > 0:
+                command_z = self._command_z_from_infos(infos)
+                actual_vrz = observations["policy"][:, ObservationIndex.VRZ]
+                self.response_history.update(
+                    actual_vrz[active_env_ids],
+                    command_z[active_env_ids],
+                    active_env_ids,
+                )
+            if done_env_ids.numel() > 0:
+                self.response_history.reset(done_env_ids)
+            # AerialBalanceEnv refreshes robustness parameters during autoreset,
+            # after terminal extras are built. Read the manager's current state
+            # so done environments receive the new episode's privileged values.
+            self._refresh_privileged_response_parameters()
         if done_env_ids.numel() > 0:
             self.adapter.reset(done_env_ids)
 
         self.last_normalized_action.copy_(normalized_action)
         self.last_physical_action.copy_(physical_action)
-        adapted_observation = self.adapter.transform(observations["policy"], update_history=True)
+        adapted_observation = self._adapt_observation(observations["policy"])
         infos.setdefault("rl", {})
         infos["rl"]["normalized_action"] = self.last_normalized_action
         infos["rl"]["physical_action"] = self.last_physical_action
-        infos["rl"]["policy_input"] = self.adapter.last_policy_input
+        infos["rl"]["policy_input"] = adapted_observation
+        if self.response_history is not None:
+            infos["rl"]["velocity_response_actual_history"] = (
+                self.response_history.actual_velocity_history
+            )
+            infos["rl"]["velocity_response_command_history"] = (
+                self.response_history.commanded_velocity_history
+            )
+            infos["rl"]["velocity_response_error_history"] = (
+                self.response_history.error_history
+            )
+            infos["rl"]["velocity_response_error"] = self.response_history.latest_error
+            infos["rl"]["velocity_response_privileged_parameters"] = (
+                self.privileged_response_parameters
+            )
         self._copy_benchmark_metrics_to_episode_info(infos)
         return {"policy": adapted_observation}, rewards, terminated, truncated, infos
+
+    def _adapt_observation(self, observation: torch.Tensor) -> torch.Tensor:
+        base_observation = self.adapter.transform(observation, update_history=True)
+        if self.response_history is None:
+            return base_observation
+        return torch.cat(
+            (
+                base_observation,
+                self.response_history.encoder_input,
+                self.privileged_response_parameters,
+            ),
+            dim=-1,
+        )
+
+    def _refresh_privileged_response_parameters(self) -> None:
+        robustness = getattr(self.env.unwrapped, "robustness", None)
+        if robustness is None:
+            raise ValueError(
+                "velocity_response_adaptation requires env.unwrapped.robustness "
+                "to expose current response parameters."
+            )
+        values = []
+        for field_name in PRIVILEGED_RESPONSE_FIELDS:
+            value = getattr(robustness, field_name, None)
+            if value is None:
+                raise ValueError(
+                    "velocity_response_adaptation requires robustness."
+                    f"{field_name}."
+                )
+            value = torch.as_tensor(value, device=self.device, dtype=torch.float32)
+            if value.ndim == 2 and value.shape[-1] == 1:
+                value = value[:, 0]
+            if value.shape != (self.num_envs,):
+                raise ValueError(
+                    f"robustness.{field_name} must have shape ({self.num_envs},), "
+                    f"got {tuple(value.shape)}."
+                )
+            if not torch.isfinite(value).all():
+                raise ValueError(f"robustness.{field_name} must contain finite values.")
+            values.append(value)
+        self.privileged_response_parameters.copy_(torch.stack(values, dim=-1))
+
+    def _command_z_from_infos(self, infos: Mapping) -> torch.Tensor:
+        step_infos = infos.get("step")
+        if not isinstance(step_infos, Mapping) or "command_z" not in step_infos:
+            raise ValueError(
+                "velocity_response_adaptation requires infos['step']['command_z'] from the environment."
+            )
+        command_z = torch.as_tensor(
+            step_infos["command_z"],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        if command_z.ndim == 2 and command_z.shape[-1] == 1:
+            command_z = command_z[:, 0]
+        if command_z.shape != (self.num_envs,):
+            raise ValueError(
+                "infos['step']['command_z'] must have shape "
+                f"({self.num_envs},), got {tuple(command_z.shape)}."
+            )
+        return command_z
 
     def _copy_benchmark_metrics_to_episode_info(self, infos: dict):
         """Expose benchmark metrics through skrl's default environment-info hook."""

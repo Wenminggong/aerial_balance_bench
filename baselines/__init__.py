@@ -19,7 +19,7 @@ from .nffb_policy import (
     validate_nffb_environment_contract,
 )
 from .nmpc_policy import NMPCPolicy, NMPCPolicyCfg
-from .rl_models import MLPNetworkCfg
+from .rl_models import AdaptiveVelocityActor, MLPNetworkCfg, PrivilegedVelocityCritic
 from .rl_observation_adapter import RLObservationAdapter, RLObservationAdapterCfg
 from .rl_policy import RLPolicy, RLPolicyCfg, validate_rl_predictor_environment_contract
 from .velocity_interface_model import VelocityInterfaceModel, VelocityInterfaceModelCfg
@@ -27,9 +27,20 @@ from .velocity_response_compensator import (
     FirstOrderVelocityResponseCompensator,
     NFFBVelocityResponseCompensationCfg,
 )
+from .velocity_response_adaptation import (
+    PRIVILEGED_RESPONSE_FIELDS,
+    ReusableVelocityResponseEncoder,
+    VelocityResponseAdaptationCfg,
+    VelocityResponseEncoder,
+    VelocityResponseEncoderCfg,
+    VelocityResponseHistoryBuffer,
+    load_velocity_response_encoder,
+    validate_velocity_response_adaptation_environment,
+)
 
 __all__ = [
     "AnglePIDCfg",
+    "AdaptiveVelocityActor",
     "BasePolicy",
     "BasePolicyCfg",
     "CPIDPolicy",
@@ -46,6 +57,8 @@ __all__ = [
     "NMPCPolicy",
     "NMPCPolicyCfg",
     "ObservationIndex",
+    "PRIVILEGED_RESPONSE_FIELDS",
+    "PrivilegedVelocityCritic",
     "RLObservationAdapter",
     "RLObservationAdapterCfg",
     "RLPolicy",
@@ -56,8 +69,15 @@ __all__ = [
     "VelocityInterfaceModel",
     "VelocityInterfaceModelCfg",
     "FirstOrderVelocityResponseCompensator",
+    "ReusableVelocityResponseEncoder",
+    "VelocityResponseAdaptationCfg",
+    "VelocityResponseEncoder",
+    "VelocityResponseEncoderCfg",
+    "VelocityResponseHistoryBuffer",
     "extract_reference_positions",
+    "load_velocity_response_encoder",
     "validate_nffb_environment_contract",
     "validate_reference_preview_horizon",
     "validate_rl_predictor_environment_contract",
+    "validate_velocity_response_adaptation_environment",
 ]

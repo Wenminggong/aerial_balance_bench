@@ -34,6 +34,18 @@ def _parse_args():
     parser.add_argument("--env_config", type=str, default=None, help="Override environment YAML config path.")
     parser.add_argument("--policy_config", type=str, default=None, help="Override RL policy YAML config path.")
     parser.add_argument("--checkpoint", type=str, default=None, help="Override checkpoint path.")
+    parser.add_argument(
+        "--actor_critic_checkpoint",
+        type=str,
+        default=None,
+        help="Override adaptive actor/critic-head checkpoint path.",
+    )
+    parser.add_argument(
+        "--encoder_checkpoint",
+        type=str,
+        default=None,
+        help="Override adaptive velocity-response encoder checkpoint path.",
+    )
     parser.add_argument("--episodes", type=int, default=None, help="Override target completed episodes.")
     parser.add_argument("--num_envs", type=int, default=None, help="Override number of parallel environments.")
     parser.add_argument("--seed", type=int, default=None, help="Override random seed. Use -1 for a random seed.")
@@ -100,6 +112,10 @@ from aerial_balance_bench.baselines import (
     RLPolicy,
     RLPolicyCfg,
     validate_rl_predictor_environment_contract,
+)
+from aerial_balance_bench.baselines.velocity_response_adaptation import (
+    PRIVILEGED_RESPONSE_FIELDS,
+    validate_velocity_response_adaptation_environment,
 )
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
@@ -286,8 +302,15 @@ def _deep_update(target: dict, values: dict):
             target[key] = value
 
 
-def _resolve_checkpoint_path(path: str | Path | None, run_config: dict[str, Any], policy_config_dir: Path) -> str | None:
-    raw = args_cli.checkpoint or run_config.get("checkpoint_path") or path
+def _resolve_checkpoint_path(
+    path: str | Path | None,
+    run_config: dict[str, Any],
+    policy_config_dir: Path,
+    *,
+    cli_override: str | None = None,
+    run_key: str = "checkpoint_path",
+) -> str | None:
+    raw = cli_override or run_config.get(run_key) or path
     if raw in (None, "", "null"):
         return None
     raw_path = Path(raw).expanduser()
@@ -369,7 +392,26 @@ def main():
     effective_policy_config = dict(policy_config)
     _deep_update(effective_policy_config, run_config.get("policy_overrides", {}))
     policy_cfg = RLPolicyCfg.from_dict(effective_policy_config)
-    policy_cfg.checkpoint_path = _resolve_checkpoint_path(policy_cfg.checkpoint_path, run_config, policy_config_path.parent)
+    policy_cfg.checkpoint_path = _resolve_checkpoint_path(
+        policy_cfg.checkpoint_path,
+        run_config,
+        policy_config_path.parent,
+        cli_override=args_cli.checkpoint,
+    )
+    policy_cfg.actor_critic_checkpoint_path = _resolve_checkpoint_path(
+        policy_cfg.actor_critic_checkpoint_path,
+        run_config,
+        policy_config_path.parent,
+        cli_override=args_cli.actor_critic_checkpoint,
+        run_key="actor_critic_checkpoint_path",
+    )
+    policy_cfg.encoder_checkpoint_path = _resolve_checkpoint_path(
+        policy_cfg.encoder_checkpoint_path,
+        run_config,
+        policy_config_path.parent,
+        cli_override=args_cli.encoder_checkpoint,
+        run_key="encoder_checkpoint_path",
+    )
 
     seed = _resolve_seed(run_config, env_config)
     random.seed(seed)
@@ -406,6 +448,19 @@ def main():
         physical_action_limit = float(base_env.action_space.high[0])
         _resolve_predictor_cfg_from_env(policy_cfg, env_cfg, base_env.step_dt)
         _validate_predictor_environment_contract(policy_cfg, env_cfg)
+        validate_velocity_response_adaptation_environment(
+            policy_cfg.velocity_response_adaptation,
+            interface_name=env_cfg.interface_name,
+            robustness_enabled=bool(env_cfg.robustness.enabled),
+            action_delay_enabled=bool(env_cfg.robustness.action_delay_enabled),
+            delay_step=int(env_cfg.robustness.delay_step),
+            delay_step_choices=env_cfg.robustness.delay_step_choices,
+            predictor_active=bool(
+                policy_cfg.state_predictor.enabled
+                and int(policy_cfg.state_predictor.delay_step) > 0
+            ),
+            context="RL evaluation velocity-response adaptation",
+        )
         policy = RLPolicy(
             policy_cfg,
             base_env.num_envs,
@@ -437,8 +492,39 @@ def main():
                 "observation_mode": policy_cfg.observation_mode,
                 "raw_observation_dim": base_env.raw_observation_dim,
                 "observation_fields": list(observation_fields),
-                "policy_input_fields": list(policy.observation_adapter.field_names),
-                "policy_input_dim": policy.observation_adapter.input_dim,
+                "base_policy_input_fields": list(policy.observation_adapter.field_names),
+                "base_policy_input_dim": policy.observation_adapter.input_dim,
+                "policy_input_fields": list(policy.policy_input_fields),
+                "policy_input_dim": policy.model_input_dim,
+                "velocity_response_adaptation": policy_cfg.velocity_response_adaptation.to_dict(),
+                "velocity_response_encoder_input_dim": (
+                    policy_cfg.velocity_response_adaptation.encoder_input_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else None
+                ),
+                "velocity_response_latent_dim": (
+                    policy_cfg.velocity_response_adaptation.latent_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else None
+                ),
+                "actor_observation_dim": (
+                    policy.base_policy_input_dim
+                    + policy_cfg.velocity_response_adaptation.encoder_input_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else policy.model_input_dim
+                ),
+                "actor_head_input_dim": (
+                    policy.base_policy_input_dim
+                    + policy_cfg.velocity_response_adaptation.latent_dim
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else policy.model_input_dim
+                ),
+                "critic_input_dim": (
+                    policy.base_policy_input_dim
+                    + len(PRIVILEGED_RESPONSE_FIELDS)
+                    if policy_cfg.velocity_response_adaptation.enabled
+                    else policy.model_input_dim
+                ),
                 "reference_preview_enabled": env_cfg.reference_preview.enabled,
                 "reference_preview_future_steps": env_cfg.reference_preview.future_steps,
                 "reference_preview_offsets": list(base_env.reference_preview_offsets),
@@ -458,6 +544,8 @@ def main():
                 ),
                 "physical_action_limit": physical_action_limit,
                 "checkpoint_path": policy_cfg.checkpoint_path,
+                "actor_critic_checkpoint_path": policy_cfg.actor_critic_checkpoint_path,
+                "encoder_checkpoint_path": policy_cfg.encoder_checkpoint_path,
                 "state_predictor_enabled": policy_cfg.state_predictor.enabled,
                 "state_predictor_delay_step": policy_cfg.state_predictor.delay_step,
                 "state_predictor_reference_mode": (
@@ -562,7 +650,7 @@ def main():
                 "truncated": _stack_or_empty(truncated_records, (0, num_envs), dtype=bool),
                 "policy_compute_time": np.asarray(policy_compute_time_records, dtype=np.float64),
                 "observation_fields": np.asarray(observation_fields),
-                "policy_input_fields": np.asarray(policy.observation_adapter.field_names),
+                "policy_input_fields": np.asarray(policy.policy_input_fields),
             }
             for key, records in step_extra_records.items():
                 if records:
@@ -585,6 +673,8 @@ def main():
             "env_config_path": str(env_config_path),
             "policy_config_path": str(policy_config_path),
             "checkpoint_path": policy_cfg.checkpoint_path,
+            "actor_critic_checkpoint_path": policy_cfg.actor_critic_checkpoint_path,
+            "encoder_checkpoint_path": policy_cfg.encoder_checkpoint_path,
             "seed": seed,
             "num_envs": num_envs,
             "target_episodes": target_episodes,
