@@ -1,0 +1,63 @@
+name: acados_nmpc_objective_v1
+output_root: logs/acados_nmpc_unified_tracking/tuning/objective_v1
+env_config: environments/configs/unified_tracking_mixed.yaml
+policy_config: baselines/configs/acados_nmpc_unified.yaml
+
+# A candidate may override objective.stage_weights and objective.terminal_weights only.
+fixed:
+  n_horizon: 30
+  rollout_steps: 600
+  batch_threads: 8
+  safe_position_min: 0.02
+  safe_position_max: 0.68
+  weight_min: 1.0e-3
+  weight_max: 1.0e3
+  max_screen_trials: 14
+
+screen:
+  seed: 666
+  num_envs: 48
+  target_episodes: 48
+  minimum_per_type: 8
+
+validation:
+  seed: 667
+  num_envs: 96
+  target_episodes: 96
+  minimum_per_type: 20
+
+timing:
+  seed: 668
+  num_envs: 1
+  max_steps: 180
+  warmup_steps: 30
+  deadline_s: 0.016666666666666666
+
+trajectory_types:
+  - constant
+  - random_b_spline
+  - random_ramp_dwell
+
+baseline:
+  stage_weights: [5.0, 0.5, 0.1, 0.05, 0.05, 0.5, 1.0]
+  terminal_weights: [25.0, 2.5, 0.5, 0.25, 0.25, 0.5]
+
+screen_gates:
+  solver_success_min: 0.99
+  fallback_max: 0.01
+  action_saturation_max: 0.20
+  tail_action_saturation_max: 0.05
+  objective_improvement_min: 0.03
+  per_type_p90_regression_max: 0.05
+
+validation_gates:
+  solver_success_min: 0.999
+  fallback_max: 0.001
+  action_saturation_max: 0.10
+  tail_action_saturation_max: 0.02
+  slack_active_max: 0.001
+  max_slack: 1.0e-3
+  balanced_rmse_improvement_min: 0.30
+  worst_p90_improvement_min: 0.20
+  constant_steady_mae_max: 0.05
+  controller_time_p99_max_s: 0.016666666666666666

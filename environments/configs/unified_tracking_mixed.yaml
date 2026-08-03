@@ -4,7 +4,7 @@ interface_name: velocity
 env:
   seed: 666
   num_envs: 1024
-  episode_length_s: 10.0
+  episode_length_s: 20.0
   device: cuda:0
 
 unified_tracking_task:
@@ -48,7 +48,7 @@ unified_tracking_task:
 
 reference_preview:
   enabled: true
-  future_steps: 30
+  future_steps: 38
 
 velocity_interface:
   max_acc: 5.0
@@ -61,29 +61,40 @@ robustness:
   recompute_ball_inertia: true
   controller_gain_variation_enabled: false
   controller_gain_range: [10.0, 10.0]
-  action_delay_enabled: false
-  delay_step: 0
+  action_delay_enabled: true
+  delay_step: 8
+  delay_step_choices: [6, 7, 8, 9, 10]
   velocity_response_enabled: true
-  # # standard vel response
-  # velocity_response_tau_s_range: [0.150, 0.160]
-  # velocity_response_gain_range: [0.84, 0.88]
-  # velocity_response_bias_range: [-0.004, -0.003]
-  # velocity_response_noise_mode: none
+  # # oracle vel response
+  # velocity_response_tau_s_range: [0.155, 0.155]
+  # velocity_response_gain_range: [0.86, 0.86]
+  # velocity_response_bias_range: [-0.0035, -0.0035]
+  # velocity_response_noise_mode: ou
   # velocity_response_noise_std_range: [0.02, 0.05]
   # velocity_response_ou_theta_range: [4.0, 10.0]
   # velocity_response_ou_mu_range: [0.0, 0.0]
   # velocity_response_noise_clip: 0.1
   # velocity_response_max_abs_velocity: 0.0
-  # extended vel response
-  velocity_response_tau_s_range: [0.100, 0.210]
-  velocity_response_gain_range: [0.72, 1.0]
-  velocity_response_bias_range: [-0.01, 0.003]
-  velocity_response_noise_mode: ou
-  velocity_response_noise_std_range: [0.02, 0.05]
+  # standard vel response
+  velocity_response_tau_s_range: [0.150, 0.160]
+  velocity_response_gain_range: [0.84, 0.88]
+  velocity_response_bias_range: [-0.004, -0.003]
+  velocity_response_noise_mode: gaussian
+  velocity_response_noise_std_range: [0.01, 0.03]
   velocity_response_ou_theta_range: [4.0, 10.0]
   velocity_response_ou_mu_range: [0.0, 0.0]
-  velocity_response_noise_clip: 0.1
+  velocity_response_noise_clip: 0.05
   velocity_response_max_abs_velocity: 0.0
+  # # extended vel response
+  # velocity_response_tau_s_range: [0.100, 0.210]
+  # velocity_response_gain_range: [0.72, 1.0]
+  # velocity_response_bias_range: [-0.01, 0.003]
+  # velocity_response_noise_mode: gaussian
+  # velocity_response_noise_std_range: [0.01, 0.03]
+  # velocity_response_ou_theta_range: [4.0, 10.0]
+  # velocity_response_ou_mu_range: [0.0, 0.0]
+  # velocity_response_noise_clip: 0.05
+  # velocity_response_max_abs_velocity: 0.0
   velocity_response_sim_tau_s: 0.1000
   velocity_response_sim_gain: 1.0127
   velocity_response_sim_bias: -0.000564

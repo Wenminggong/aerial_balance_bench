@@ -10,5 +10,7 @@ AGENTS.md
 
 # Python cache files
 __pycache__/
+build/
+c_generated_code/
 *.py[cod]
 *$py.class

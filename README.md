@@ -282,7 +282,8 @@ Required core dependencies:
 
 Optional baseline dependencies:
 
-- NMPC: `do-mpc` and `casadi`
+- Legacy NMPC: `do-mpc` and `casadi`
+- Unified real-time NMPC: external [acados v0.5.4](https://github.com/acados/acados/releases/tag/v0.5.4) with `acados_template`; see [acados Unified-NMPC](docs/acados_unified_nmpc.md) for the build and environment setup
 - RL/RPO: `skrl`; `wandb` is optional for experiment logging
 
 From the project root, expose the package parent on `PYTHONPATH` when using interactive scripts or notebooks:
@@ -398,7 +399,7 @@ Use the sine, triangle, trapezoid, random B-spline, and random ramp-dwell
 singleton configs for publishable per-family comparisons; use the mixed config
 as an aggregate transfer and sampling-coverage check.
 
-NMPC:
+Legacy do-mpc NMPC (target-position path, unchanged):
 
 ```bash
 python3 scripts/nmpc_policy_eval.py \
@@ -408,6 +409,47 @@ python3 scripts/nmpc_policy_eval.py \
   --num_envs 2 \
   --headless
 ```
+
+The independent acados NMPC consumes the unified position/velocity preview,
+models the nominal first-order low-level velocity response, and uses
+SQP-RTI/HPIPM. It does not replace the legacy controller:
+
+```bash
+# D=0, effective N=30
+python3 scripts/acados_nmpc_unified_eval.py \
+  --config baselines/configs/acados_nmpc_unified_tracking_eval.yaml \
+  --episodes 10 \
+  --num_envs 1 \
+  --headless
+
+# D=8 external state predictor, raw H=38, effective N=30
+python3 scripts/acados_nmpc_unified_eval.py \
+  --config baselines/configs/acados_nmpc_unified_tracking_predictor_d8_eval.yaml \
+  --episodes 10 \
+  --num_envs 1 \
+  --headless
+```
+
+The NMPC core itself is delay-free. The second command uses the existing
+`VelocityModelStatePredictor` to provide an equivalent delay-free state and
+rebases references from `D ... D+N`. Full formulation, field ordering,
+fallback behavior, generated-code caching, and timing acceptance criteria are
+documented in [acados Unified-NMPC](docs/acados_unified_nmpc.md).
+
+The acados objective weights can be tuned sequentially with one rollout per
+invocation. The workflow fixes the mixed environment and `N=30`, records a
+SHA256-pinned recoverable session, and only permits stage/terminal objective
+weight candidates:
+
+```bash
+conda run -n isaac-sim python scripts/tune_acados_nmpc_objective.py \
+  --stage next
+```
+
+Results and the next recommendation are written below
+`logs/acados_nmpc_unified_tracking/tuning/objective_v1/`. See the
+[objective-tuning section](docs/acados_unified_nmpc.md#13-objective-权重的顺序自适应调优)
+for validation and promotion commands.
 
 NFFB on unified reference tracking:
 
@@ -574,8 +616,9 @@ python3 scripts/rl_policy_eval.py \
 Use another `unified_tracking_<type>.yaml` singleton config for the other
 families. In particular, `unified_tracking_random_b_spline.yaml` and
 `unified_tracking_random_ramp_dwell.yaml` evaluate generalization beyond the
-four-family training distribution. CPID and NMPC retain their existing task
-paths.
+four-family training distribution. CPID and the legacy do-mpc NMPC retain
+their existing task paths; the independent acados NMPC explicitly supports
+the unified task.
 
 Evaluate the same 29-D relative-preview checkpoint with an eight-step model
 predictor and an aligned 38-step raw preview:
@@ -680,7 +723,7 @@ Common environment fields:
 | `velocity_interface`, `position_interface`, `thrust_interface` | Interface-specific action limits and low-level controller settings. |
 | `robustness` | Enables mass, gain, delay, velocity-response, and disturbance tests. |
 | `target_position_evaluator`, `trajectory_tracking_evaluator`, `unified_tracking_evaluator` | Evaluation episode count, tolerance, final-window settings, and task-specific aggregates. |
-| `runner` | Evaluation episode target, maximum rollout steps, rendering, and rollout saving. |
+| `runner` | Evaluation episode target, maximum rollout steps, optional target-count early stop, rendering, and rollout saving. |
 | `logging` | Output root and run name. |
 
 Template configs:
@@ -694,6 +737,10 @@ Template configs:
 - `environments/configs/unified_tracking_triangle_predictor.yaml`
 - `baselines/configs/cpid_predictor_velocity_response.yaml`
 - `baselines/configs/cpid_unified_tracking_predictor_eval.yaml`
+- `baselines/configs/acados_nmpc_unified.yaml`
+- `baselines/configs/acados_nmpc_objective_tuning.yaml`
+- `baselines/configs/acados_nmpc_unified_tracking_eval.yaml`
+- `baselines/configs/acados_nmpc_unified_tracking_predictor_d8_eval.yaml`
 - `baselines/configs/nffb.yaml`
 - `baselines/configs/nffb_unified_tracking_eval.yaml`
 - `baselines/configs/nffb_unified_tracking_predictor_eval.yaml`
@@ -793,7 +840,8 @@ parameters, or the low-level flight dynamics.
 | --- | --- | --- |
 | Cascaded PID | `baselines/cpid_policy.py`, `baselines/configs/cpid.yaml` | Outer-loop incremental PID generates a beam-angle reference from ball-position error; inner-loop incremental PID generates a vertical-velocity increment. |
 | NFFB | `baselines/nffb_policy.py`, `baselines/configs/nffb.yaml` | Combines discrete reference-acceleration feedforward and ball-tracking feedback, inverts the nonlinear ball dynamics, filters the beam-angle command, and applies exact rope--beam geometric inversion. |
-| NMPC | `baselines/nmpc_policy.py`, `baselines/nmpc_core.py`, `baselines/configs/nmpc.yaml` | Solves a nonlinear optimal control problem over velocity-interface dynamics using do-mpc/CasADi. |
+| Legacy NMPC | `baselines/nmpc_policy.py`, `baselines/nmpc_core.py`, `baselines/configs/nmpc.yaml` | Solves the original target-position nonlinear optimal control problem using do-mpc/CasADi; behavior is unchanged. |
+| acados unified-NMPC | `baselines/acados_nmpc_policy.py`, `baselines/acados_nmpc_core.py`, `baselines/configs/acados_nmpc_unified.yaml` | Uses unified position/velocity preview, exact first-order response plus nonlinear ball--beam dynamics, SQP-RTI/HPIPM, and native acados batch solves. |
 | RL/RPO | `baselines/rl_policy.py`, `baselines/rl_models.py`, `baselines/configs/rl_rpo.yaml` | Uses skrl RPO/PPO-compatible MLP actor-critic models; the optional asymmetric variant gives only the actor a velocity-history encoder and gives the critic true `tau/gain/bias` parameters during training. |
 
 ### Simulation results

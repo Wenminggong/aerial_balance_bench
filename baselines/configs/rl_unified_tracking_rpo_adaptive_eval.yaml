@@ -11,5 +11,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/rl_unified_tracking
+  root_dir: logs/rl_unified_tracking/rpo_unified_tracking_relative_reference_preview_30_adaptive_train_seed_1024
   run_name: rpo_unified_tracking_asymmetric_response_adaptive_eval

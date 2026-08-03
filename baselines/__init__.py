@@ -1,6 +1,7 @@
 """Baseline policies for Aerial-Balance-Bench."""
 
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
+from .acados_nmpc_policy import AcadosNMPCPolicy, AcadosNMPCPolicyCfg
 from .cpid_policy import AnglePIDCfg, CPIDPolicy, CPIDPolicyCfg, VelocityPIDCfg
 from .model_state_predictor import (
     VelocityModelStatePredictor,
@@ -39,6 +40,8 @@ from .velocity_response_adaptation import (
 )
 
 __all__ = [
+    "AcadosNMPCPolicy",
+    "AcadosNMPCPolicyCfg",
     "AnglePIDCfg",
     "AdaptiveVelocityActor",
     "BasePolicy",

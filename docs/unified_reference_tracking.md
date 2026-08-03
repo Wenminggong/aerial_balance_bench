@@ -361,6 +361,8 @@ initial_ball_position
 | `baselines/configs/rl_unified_tracking_rpo_predictor_eval.yaml` | Complete compensated RL evaluation run for `D=8`, raw `H=38`. |
 | `baselines/configs/cpid_unified_tracking_eval.yaml` | Unchanged CPID evaluation on the mixed task; switch singleton env with `--env_config`. |
 | `baselines/configs/cpid_unified_tracking_predictor_eval.yaml` | CPID with an eight-step response-aware predictor and aligned reference preview. |
+| `baselines/configs/acados_nmpc_unified_tracking_eval.yaml` | Independent acados unified-NMPC with `D=0`, raw/effective `H=N=30`. |
+| `baselines/configs/acados_nmpc_unified_tracking_predictor_d8_eval.yaml` | acados unified-NMPC with the external predictor at `D=8`, raw `H=38`, effective `N=30`. |
 | `baselines/configs/nffb_unified_tracking_eval.yaml` | Delay-free NFFB evaluation run; switch singleton env with `--env_config`. |
 | `baselines/configs/nffb_unified_tracking_predictor_eval.yaml` | NFFB with an eight-step response-aware predictor and `D+1` velocity preview. |
 | `baselines/configs/nffb_sine_tuning.yaml` | Resumable phase-zero sine bandwidth search, stress tests, ablation, and validation. |
@@ -603,8 +605,9 @@ Use a new logging root/run name when changing metric schemas or experimental dis
 | RL train/eval | Supported as before | Supported with velocity interface; optional asymmetric response adaptation requires `D=0` | `relative_reference_preview`, `reference_preview`, `legacy8`, and `full11` adapters supported |
 | Existing RL checkpoints | Unchanged with their original mode/config | Not automatically transferable | Full preview requires matching raw `H`; relative preview requires matching effective `H`, `K`, offsets, and fields |
 | CPID runner/policy | Supported for its existing task paths | Supported by the dedicated unified runner | Future positions consumed only by an active predictor |
-| NMPC runner/policy | Supported for its existing task paths | Not supported | Not modified |
+| Legacy do-mpc NMPC runner/policy | Supported for its existing task paths | Not supported | Not modified |
+| acados unified-NMPC runner/policy | Separate policy; does not alter legacy tasks | Supported with velocity interface | Consumes `pg_i,vg_i` for `0...N`; with external predictor consumes `D...D+N` and requires raw `H >= D+N` |
 | NFFB runner/policy | Not exposed on legacy tasks | Supported with velocity interface | Delay-free requires `H >= 1`; delayed prediction requires `H >= D + 1` |
 | Velocity state predictor | Existing combinations unchanged; task-independent future-reference API available | `pg_0 ... pg_D` supported in CPID, NFFB, RL legacy modes, and RL relative-preview evaluation | NFFB additionally consumes `vg_D` and `vg_{D+1}`; RL relative preview rebases at `D`; full RL preview remains unsupported |
 
-The standard unified mixed/singleton YAML files use `H=30`; the six RL delay-only configs use `D=8`, raw `H=38`, and the same effective 30-step policy horizon. Specialized response/predictor configs retain their existing horizons. `target_position`, `trajectory_tracking`, the 11-D default observation, legacy evaluator keys, existing adapter modes, and legacy checkpoint input dimensions remain intact.
+The standard unified mixed/singleton YAML files use `H=30`; the six delay-only configs use `D=8`, raw `H=38`, and the same effective 30-step policy/NMPC horizon. The acados NMPC core contains no delay queue: `VelocityModelStatePredictor` supplies its equivalent delay-free state. Specialized response/predictor configs retain their existing horizons. `target_position`, `trajectory_tracking`, the 11-D default observation, legacy evaluator keys, existing adapter modes, and legacy checkpoint input dimensions remain intact.

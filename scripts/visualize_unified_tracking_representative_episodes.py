@@ -1,4 +1,4 @@
-"""Plot representative NFFB, CPID, or RL unified-tracking episodes."""
+"""Plot representative NFFB, CPID, RL, or acados NMPC unified-tracking episodes."""
 
 from __future__ import annotations
 
@@ -51,7 +51,10 @@ class VisualizationResult:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Visualize the lowest- and highest-RMSE episodes in an NFFB, CPID, or RL rollout."
+        description=(
+            "Visualize the lowest- and highest-RMSE episodes in an NFFB, CPID, "
+            "RL, or acados NMPC rollout."
+        )
     )
     parser.add_argument(
         "run_dir",
@@ -87,7 +90,7 @@ def _load_resolved_run(run_dir: Path) -> dict:
 
 
 def _step_dt(run_dir: Path, resolved_run: dict) -> float:
-    for key in ("step_dt", "policy_step_dt"):
+    for key in ("step_dt", "policy_step_dt", "control_step_dt"):
         value = resolved_run.get(key)
         if value is not None:
             return float(value)
@@ -114,6 +117,39 @@ def _controller_signals(
     resolved_run: dict,
 ) -> ControllerSignals:
     keys = set(rollout.files)
+
+    policy_name = str(
+        resolved_run.get("resolved_policy_config", {}).get("name", "")
+    ).lower()
+    acados_markers = {
+        "acados_nmpc_action",
+        "acados_nmpc_state_command_z",
+        "acados_nmpc_solver_status",
+    }
+    if keys.intersection(acados_markers) or (
+        "acados" in policy_name and "nmpc" in policy_name
+    ):
+        # The NMPC optimizes velocity-command increments and does not expose an
+        # explicit beam-angle target. Plot the resulting absolute interface
+        # command against the measured vertical velocity instead of treating
+        # acados_nmpc_action as an absolute velocity target.
+        velocity_candidates = (
+            "step_vrz_cmd",
+            "step_command_z",
+            "acados_nmpc_state_command_z",
+        )
+        velocity_key = next((key for key in velocity_candidates if key in keys), None)
+        if velocity_key is None:
+            raise KeyError(
+                "Detected an acados NMPC rollout, but no absolute vertical-velocity "
+                f"command was found. Tried: {velocity_candidates}."
+            )
+        return ControllerSignals(
+            controller_name="acados NMPC",
+            theta_desired_key=None,
+            vertical_velocity_desired_key=velocity_key,
+        )
+
     if "policy_theta_d" in keys:
         if "policy_velocity_desired" not in keys:
             raise KeyError(
@@ -165,8 +201,9 @@ def _controller_signals(
         )
 
     raise ValueError(
-        "Unsupported rollout controller. Expected NFFB field 'policy_theta_d' "
-        "or CPID field 'policy_theta_ref', or RL rollout metadata/action fields."
+        "Unsupported rollout controller. Expected acados NMPC diagnostic fields, "
+        "NFFB field 'policy_theta_d', CPID field 'policy_theta_ref', or RL rollout "
+        "metadata/action fields."
     )
 
 
@@ -301,6 +338,11 @@ def visualize(
         episode_ids = (best_id, worst_id)
         colors = ("tab:blue", "tab:orange")
 
+        controller_title = _controller_title(
+            controller_signals.controller_name,
+            resolved_run,
+        )
+
         fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
         _plot_pair(
             axes[0],
@@ -324,7 +366,9 @@ def visualize(
             r"desired $\theta$",
         )
         if theta_desired is None:
-            axes[1].set_title(r"(b) Beam Angle (RL has no explicit desired $\theta$)")
+            axes[1].set_title(
+                rf"(b) Beam Angle ({controller_title} has no explicit desired $\theta$)"
+            )
         else:
             axes[1].set_title(r"(b) Beam Angle Tracking")
         axes[1].set_ylabel(r"Beam angle $\theta$ (rad)")
@@ -344,7 +388,7 @@ def visualize(
         axes[2].set_xlim(time_s[0], time_s[-1])
 
         fig.suptitle(
-            f"{_controller_title(controller_signals.controller_name, resolved_run)} "
+            f"{controller_title} "
             f"{reference_label} Tracking: "
             "Best and Worst Episodes\n"
             f"Best ID {best_id}: RMSE = {best_rmse:.5f} m    |    "
@@ -385,7 +429,10 @@ def main() -> None:
     result = visualize(run_dir, output_path, args.dpi)
     print(f"Detected controller: {result.controller_name}")
     if result.theta_desired_key is None:
-        print("Desired theta signal: unavailable (RL has no explicit beam-angle target)")
+        print(
+            "Desired theta signal: unavailable "
+            f"({result.controller_name} has no explicit beam-angle target)"
+        )
     else:
         print(f"Desired theta signal: {result.theta_desired_key}")
     print(f"Desired vertical-velocity signal: {result.vertical_velocity_desired_key}")

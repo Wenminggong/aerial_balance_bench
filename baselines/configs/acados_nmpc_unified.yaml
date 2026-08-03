@@ -1,0 +1,70 @@
+acados_nmpc_policy:
+  name: acados_unified_nmpc
+  build_root: build/acados_unified_nmpc
+
+  model:
+    plank_length: auto
+    rope_length: auto
+    ball_position_offset: auto
+    gravity: auto
+    ball_mass: auto
+    ball_radius: auto
+    ball_inertia_ratio: 0.4
+    epsilon: 1.0e-9
+
+  response:
+    enabled: true
+    tau_s: 0.155
+    gain: 0.86
+    bias: -0.0035
+
+  objective:
+    # [pb-pg, vb-vg, theta, omega, vrz, command_z+u, u]
+    stage_weights: [20, 4, 0.1, 0.2, 0.2, 0.05, 0.25]
+    # [pb-pg, vb-vg, theta, omega, vrz, command_z]
+    terminal_weights: [100, 20, 0.5, 1, 1, 0.05]
+  constraints:
+    ball_position_min: 0.0
+    ball_position_max: 0.70
+    theta_min: -0.6981317007977318
+    theta_max: 0.6981317007977318
+    tracking_error_min: -0.5
+    tracking_error_max: 0.5
+    slack_l1: 10000.0
+    slack_l2: 10000.0
+    max_acc: auto
+    max_velocity: auto
+
+  solver:
+    n_horizon: 30
+    step_dt: auto
+    nlp_solver_type: SQP_RTI
+    qp_solver: PARTIAL_CONDENSING_HPIPM
+    hessian_approx: GAUSS_NEWTON
+    integrator_type: DISCRETE
+    qp_solver_cond_N: 10
+    qp_solver_warm_start: 1
+    levenberg_marquardt: 0.0
+    print_level: 0
+    num_threads_in_batch_solve: 1
+
+  state_predictor:
+    enabled: true
+    delay_step: 8
+    solver: rk4
+    step_dt: auto
+    max_acc: auto
+    max_velocity: auto
+    velocity_response_enabled: true
+    velocity_response_tau_s: 0.155
+    velocity_response_gain: 0.86
+    velocity_response_bias: -0.0035
+    velocity_response_max_abs_velocity: 0.0
+    plank_length: auto
+    rope_length: auto
+    ball_position_offset: auto
+    gravity: auto
+    ball_mass: auto
+    ball_radius: auto
+    ball_inertia_ratio: 0.4
+    epsilon: 1.0e-6
