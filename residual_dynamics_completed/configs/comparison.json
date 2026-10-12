@@ -1,0 +1,172 @@
+{
+  "seed": 7,
+  "threads": 1,
+  "dtype": "float64",
+  "device": "cpu",
+  "batch_size": 256,
+  "patience": 20,
+  "min_improvement": 0.000001,
+  "gradient_clip": 1,
+  "legacy": {
+    "data": {
+      "position_bin_edges_m": [
+        0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7
+      ]
+    }
+  },
+  "sampling": {
+    "empirical_fraction": 0.4,
+    "joint_fraction": 0.4,
+    "actuation_fraction": 0.2,
+    "velocity_bin_edges_mps": [
+      -1e+100,
+      -0.3,
+      -0.15,
+      -0.06,
+      -0.02,
+      0.02,
+      0.06,
+      0.15,
+      0.3,
+      1e+100
+    ],
+    "actuation_threshold_mps2": 0.1
+  },
+  "identification_loss": {
+    "horizons": [
+      3,
+      6,
+      12
+    ],
+    "horizon_weights": [
+      0.5,
+      0.3,
+      0.2
+    ],
+    "point_weight": 0.25,
+    "huber_beta": 0.02
+  },
+  "rollout_loss": {
+    "horizons": [
+      6,
+      12,
+      30,
+      33
+    ],
+    "horizon_weights": [
+      0.35,
+      0.3,
+      0.2,
+      0.15
+    ],
+    "position_scale": 0.01,
+    "velocity_scale": 0.05,
+    "causal_auxiliary_weight": 0.25,
+    "huber_beta": 1
+  },
+  "stages": [
+    {
+      "name": "stage1",
+      "epochs": 80,
+      "steps": 16,
+      "lr": 0.003,
+      "rollout_weight": 0
+    },
+    {
+      "name": "stage2",
+      "epochs": 50,
+      "steps": 8,
+      "lr": 0.0003,
+      "rollout_weight": 0.5
+    }
+  ],
+  "validation": {
+    "max_windows": 512,
+    "stride": 5,
+    "score_weights": [
+      0.15,
+      0.2,
+      0.325,
+      0.325
+    ],
+    "horizon": 33
+  },
+  "test": {
+    "max_windows": 2048,
+    "stride": 5,
+    "horizons": [
+      6,
+      12,
+      18,
+      24,
+      30,
+      36,
+      42,
+      48,
+      54,
+      60
+    ]
+  },
+  "models": {
+    "output_limit": 0.25,
+    "profile": {
+      "centers": 13,
+      "width": 0.065,
+      "delta_limit": 0.035
+    },
+    "friction": {
+      "vtransition": 0.025,
+      "coulomb_limit": 0.15,
+      "viscous_limit": 0.5
+    },
+    "rbf_pv": {
+      "p_centers": [
+        0,
+        0.0875,
+        0.175,
+        0.2625,
+        0.35,
+        0.4375,
+        0.525,
+        0.6125,
+        0.7
+      ],
+      "v_centers": [
+        -0.5,
+        -0.3,
+        -0.15,
+        -0.06,
+        0,
+        0.06,
+        0.15,
+        0.3,
+        0.5
+      ],
+      "widths": [
+        0.1,
+        0.1
+      ],
+      "ood_gate": false,
+      "coefficient_clamp": false
+    },
+    "mlp": {
+      "hidden": [
+        16,
+        16
+      ],
+      "activation": "tanh",
+      "l2": 0.00001
+    },
+    "difference_regularization": [
+      0.002,
+      0.01
+    ]
+  }
+}

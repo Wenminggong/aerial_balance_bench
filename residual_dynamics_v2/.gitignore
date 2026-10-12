@@ -1,0 +1,11 @@
+# Large generated artifacts remain local; reviewed summaries stay tracked.
+data/processed_rbf_pv/*
+!data/processed_rbf_pv/.gitkeep
+runs/training_rbf_pv/*
+!runs/training_rbf_pv/.gitkeep
+runs/wandb_rbf_pv/*
+!runs/wandb_rbf_pv/.gitkeep
+results_rbf_pv/figures/*
+!results_rbf_pv/figures/.gitkeep
+__pycache__/
+*.py[cod]

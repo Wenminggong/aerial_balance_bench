@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "latex_compiled": false,
+  "reason": "AGENTS.md explicitly excludes full-paper compilation",
+  "offline_four_part_structure": true,
+  "double_column_figure": true,
+  "offline_result_table_absent": true,
+  "real_world_section_unchanged": true,
+  "figure_hashes_verified": true,
+  "local_references_resolve": true,
+  "paper_sha256": "745779616123aa4b500f8301025524a203e1e7ce5f587ba803688ed3b38d29b1",
+  "paper_figure_provenance": {
+    "experiment": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics_completed",
+    "acceptance_sha256": "658886ab9fb14ea81b07c432492831beb04e13bbd16cca89e9e5aa5cd7decf84",
+    "test_metadata_sha256": "8f1ebadc2ac0ade47bb22d17eaa8a267acf7f4521cc5a2e9ae331926f85a8aea",
+    "window_hash": "839102797ff97b2a33890294120456b5332290b59737f16b8a8cad4eda9b1d1e",
+    "copied_artifacts": {
+      "offline_residual_rollout_rmse.pdf": "1e465862cce67af3d31de6b0c1ce686f6e8153f43bd421eb4af0803dbab71706",
+      "offline_residual_rollout_rmse.png": "9420999a1fe850614767c4aaa1d36d45fd27b9b751475ba68c4828edad68c031",
+      "offline_residual_rollout_rmse.csv": "592f8c240ff7c14039c60cdacdbcb7998728d14b8563664f7e6ea0e030d5dfc3"
+    }
+  }
+}

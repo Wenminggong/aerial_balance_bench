@@ -387,14 +387,23 @@ class VelocityModelStatePredictor:
         arz = predicted[:, ObservationIndex.ARZ].clone()
 
         for step_id in range(commands.shape[0]):
-            vrz, response_nominal_z = self._velocity_response_step(
-                commands[step_id, :, 0],
-                response_nominal_z,
+            vrz_start, vrz_half, vrz, response_nominal_z, displacement_z = (
+                self._velocity_response_profile(
+                    commands[step_id, :, 0],
+                    response_nominal_z,
+                )
             )
-            pb, vb, theta, ab, omega = self._integrate_one_step(pb, vb, theta, vrz)
+            pb, vb, theta, ab, omega = self._integrate_one_step(
+                pb,
+                vb,
+                theta,
+                vrz_start,
+                vrz_half,
+                vrz,
+            )
             alpha = (omega - omega_prev) / self.step_dt
             arz = (vrz - vrz_prev) / self.step_dt
-            drz = drz + vrz * self.step_dt
+            drz = drz + displacement_z
             omega_prev = omega
             vrz_prev = vrz
             new_error = pb - reference_positions[:, step_id + 1]
@@ -547,30 +556,57 @@ class VelocityModelStatePredictor:
         ordered_ids = (torch.arange(self.delay_step, device=self.device) + self.read_index) % self.delay_step
         return self.command_queue[ordered_ids].clone()
 
-    def _velocity_response_step(
+    def _velocity_response_profile(
         self,
         input_z: torch.Tensor,
         previous_nominal_z: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Apply the simulator's deterministic first-order response for one step."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return exact held-command response values at RK4 nodes and its integral."""
         if not self.velocity_response_enabled:
-            return input_z, input_z
+            displacement_z = input_z * self.step_dt
+            return input_z, input_z, input_z, input_z, displacement_z
 
         target_z = self.velocity_response_gain * input_z + self.velocity_response_bias
         if self.velocity_response_tau_s > 0.0:
-            nominal_z = self.velocity_response_decay * previous_nominal_z
-            nominal_z += (1.0 - self.velocity_response_decay) * target_z
-        else:
-            nominal_z = target_z
-
-        executed_z = nominal_z
-        if self.velocity_response_max_abs_velocity > 0.0:
-            executed_z = torch.clamp(
-                executed_z,
-                min=-self.velocity_response_max_abs_velocity,
-                max=self.velocity_response_max_abs_velocity,
+            half_decay = math.sqrt(float(self.velocity_response_decay.item()))
+            nominal_start_z = previous_nominal_z
+            nominal_half_z = half_decay * previous_nominal_z
+            nominal_half_z += (1.0 - half_decay) * target_z
+            nominal_end_z = self.velocity_response_decay * previous_nominal_z
+            nominal_end_z += (1.0 - self.velocity_response_decay) * target_z
+            displacement_z = target_z * self.step_dt
+            displacement_z += (
+                (previous_nominal_z - target_z)
+                * self.velocity_response_tau_s
+                * (1.0 - self.velocity_response_decay)
             )
-        return executed_z, nominal_z
+        else:
+            nominal_start_z = target_z
+            nominal_half_z = target_z
+            nominal_end_z = target_z
+            displacement_z = target_z * self.step_dt
+
+        executed_start_z = nominal_start_z
+        executed_half_z = nominal_half_z
+        executed_end_z = nominal_end_z
+        if self.velocity_response_max_abs_velocity > 0.0:
+            limit = self.velocity_response_max_abs_velocity
+            executed_start_z = torch.clamp(executed_start_z, min=-limit, max=limit)
+            executed_half_z = torch.clamp(executed_half_z, min=-limit, max=limit)
+            executed_end_z = torch.clamp(executed_end_z, min=-limit, max=limit)
+            # The integral of a clipped exponential is piecewise.  Simpson's
+            # rule keeps the diagnostic position consistent with the same
+            # three response values used by the physical RK4 step.
+            displacement_z = (self.step_dt / 6.0) * (
+                executed_start_z + 4.0 * executed_half_z + executed_end_z
+            )
+        return (
+            executed_start_z,
+            executed_half_z,
+            executed_end_z,
+            nominal_end_z,
+            displacement_z,
+        )
 
     def _prepare_error_prev1(self, error_prev1: torch.Tensor | None, current_error: torch.Tensor) -> torch.Tensor:
         if error_prev1 is None:
@@ -590,25 +626,27 @@ class VelocityModelStatePredictor:
         pb: torch.Tensor,
         vb: torch.Tensor,
         theta: torch.Tensor,
-        vrz: torch.Tensor,
+        vrz_start: torch.Tensor,
+        vrz_half: torch.Tensor,
+        vrz_end: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.solver == "euler":
-            derivatives = self._derivatives(pb, vb, theta, vrz)
+            derivatives = self._derivatives(pb, vb, theta, vrz_start)
             pb_next = pb + derivatives[:, 0] * self.step_dt
             vb_next = vb + derivatives[:, 1] * self.step_dt
             theta_next = theta + derivatives[:, 2] * self.step_dt
         else:
             state = torch.stack((pb, vb, theta), dim=-1)
-            k1 = self._derivatives_from_state(state, vrz)
-            k2 = self._derivatives_from_state(state + 0.5 * self.step_dt * k1, vrz)
-            k3 = self._derivatives_from_state(state + 0.5 * self.step_dt * k2, vrz)
-            k4 = self._derivatives_from_state(state + self.step_dt * k3, vrz)
+            k1 = self._derivatives_from_state(state, vrz_start)
+            k2 = self._derivatives_from_state(state + 0.5 * self.step_dt * k1, vrz_half)
+            k3 = self._derivatives_from_state(state + 0.5 * self.step_dt * k2, vrz_half)
+            k4 = self._derivatives_from_state(state + self.step_dt * k3, vrz_end)
             next_state = state + (self.step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             pb_next = next_state[:, 0]
             vb_next = next_state[:, 1]
             theta_next = next_state[:, 2]
 
-        final_derivatives = self._derivatives(pb_next, vb_next, theta_next, vrz)
+        final_derivatives = self._derivatives(pb_next, vb_next, theta_next, vrz_end)
         ab_next = final_derivatives[:, 1]
         omega_next = final_derivatives[:, 2]
         return pb_next, vb_next, theta_next, ab_next, omega_next

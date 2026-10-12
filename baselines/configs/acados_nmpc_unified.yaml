@@ -14,9 +14,9 @@ acados_nmpc_policy:
 
   response:
     enabled: true
-    tau_s: 0.155
-    gain: 0.86
-    bias: -0.0035
+    tau_s: 0.187
+    gain: 1.00
+    bias: -0.00485
 
   objective:
     # [pb-pg, vb-vg, theta, omega, vrz, command_z+u, u]
@@ -56,9 +56,9 @@ acados_nmpc_policy:
     max_acc: auto
     max_velocity: auto
     velocity_response_enabled: true
-    velocity_response_tau_s: 0.155
-    velocity_response_gain: 0.86
-    velocity_response_bias: -0.0035
+    velocity_response_tau_s: 0.187
+    velocity_response_gain: 1.00
+    velocity_response_bias: -0.00485
     velocity_response_max_abs_velocity: 0.0
     plank_length: auto
     rope_length: auto

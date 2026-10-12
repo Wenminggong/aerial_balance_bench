@@ -1,0 +1,505 @@
+{
+  "source": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics_v2/data/processed_rbf_pv",
+  "destination": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics_completed/data/processed",
+  "files": [
+    {
+      "file": "manifest.json",
+      "sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+      "bytes": 895097
+    },
+    {
+      "file": "normalization.json",
+      "sha256": "f47504b81a539290cdda8cb30923cc50b2fc0e6a538f82e9f078d0eb78c6b933",
+      "bytes": 1287
+    },
+    {
+      "file": "trials/20260815__constant_015__20260815194840_trial_001_tracking_duration.npz",
+      "sha256": "3224f015b5df7febd2801b9978b577ef5d7a4ccb08332a1f48b6ccc29b76a1a4",
+      "bytes": 339170
+    },
+    {
+      "file": "trials/20260815__constant_015__20260815194925_trial_002_tracking_duration.npz",
+      "sha256": "98a0b34315810502f6955f4254929e53877c1508c9505231114a55796b246be6",
+      "bytes": 345245
+    },
+    {
+      "file": "trials/20260815__constant_015__20260815195104_trial_003_tracking_duration.npz",
+      "sha256": "53996f5883b4e1435b67f029235ffd32fc9964c4ccc9c899abc52f8662cf98f4",
+      "bytes": 341374
+    },
+    {
+      "file": "trials/20260815__constant_035_2__20260815210319_trial_001_tracking_duration.npz",
+      "sha256": "9631690ebae43133920cd8119ad929e456ba9d67729b93238ec5bc04b6819925",
+      "bytes": 342488
+    },
+    {
+      "file": "trials/20260815__constant_035_2__20260815210358_trial_002_tracking_duration.npz",
+      "sha256": "f7187aa37c56317d765b11c2e6b911c3c508a45e7f3754e91f1116f7a9f9bfe8",
+      "bytes": 343713
+    },
+    {
+      "file": "trials/20260815__constant_035__20260815192639_trial_001_tracking_duration.npz",
+      "sha256": "8b2a477d8f2d707a2648ab3a7cf93095b37f32d8c9c2b82f6b9225ff59e420d5",
+      "bytes": 342235
+    },
+    {
+      "file": "trials/20260815__constant_035__20260815192727_trial_002_tracking_duration.npz",
+      "sha256": "8579c3bcf071518452a184373fae47255134effe8560f087603afab2bdc14857",
+      "bytes": 337768
+    },
+    {
+      "file": "trials/20260815__constant_035__20260815192811_trial_003_tracking_duration.npz",
+      "sha256": "b6e5a395ead6e617ab3caba7cc02c2ec9263aba46d70d75df9af883069480ead",
+      "bytes": 335804
+    },
+    {
+      "file": "trials/20260815__constant_055__20260815194034_trial_001_tracking_duration.npz",
+      "sha256": "8b446b4802a3cc5ec8488479a1b3731637f08e8af5bfaecbefa74665fa192fbf",
+      "bytes": 335283
+    },
+    {
+      "file": "trials/20260815__constant_055__20260815194131_trial_002_tracking_duration.npz",
+      "sha256": "13206d91c97e9c717a2995cd576dc092eb38c8aec03b5d7f1062f37ef2707821",
+      "bytes": 336128
+    },
+    {
+      "file": "trials/20260815__constant_055__20260815194218_trial_003_tracking_duration.npz",
+      "sha256": "98b08e26d18bc836c9f8c5b034366dbfb05b0978b7cccc4fa4da3042f148156e",
+      "bytes": 339583
+    },
+    {
+      "file": "trials/20260815__sine_period_6__20260815202902_trial_001_tracking_duration.npz",
+      "sha256": "bfa2eba61490cd98e10e3258a31631e1eecf834e15ed8eefece0eaf1742ab1cf",
+      "bytes": 354785
+    },
+    {
+      "file": "trials/20260815__sine_period_6__20260815202946_trial_002_tracking_duration.npz",
+      "sha256": "a1299e920ea3228828ca5c3bf5577c7f72d59d65b07c5f41e021ef0d511b11a9",
+      "bytes": 354454
+    },
+    {
+      "file": "trials/20260815__sine_period_6__20260815203032_trial_003_tracking_duration.npz",
+      "sha256": "d567fdd904b84df06302746508812ab073186fbfe624c6d0bcf35e586281a2d7",
+      "bytes": 356021
+    },
+    {
+      "file": "trials/20260815__sine_period_8__20260815200053_trial_001_tracking_duration.npz",
+      "sha256": "1c35ea96d399e5d5bae424cf93e1f8b523569faebed68a43237417a616481fbf",
+      "bytes": 355271
+    },
+    {
+      "file": "trials/20260815__sine_period_8__20260815200215_trial_002_tracking_duration.npz",
+      "sha256": "b9872aba81681223e81c9da0341ebecb43bd509e41d710ed9c73a1d3c3c0c6cd",
+      "bytes": 353924
+    },
+    {
+      "file": "trials/20260815__sine_period_8__20260815200306_trial_003_tracking_duration.npz",
+      "sha256": "d54d019aa06c2f44420ef28087c17fab2e5a14ab4060acb452c71e2adf8f5876",
+      "bytes": 353789
+    },
+    {
+      "file": "trials/20260815__trapezoid_period_6__20260815205412_trial_001_tracking_duration.npz",
+      "sha256": "6dabdbb7980d26f40fe3321a8bbe14ec807ddf09c90f839fc57a5dcdba22bc1c",
+      "bytes": 354265
+    },
+    {
+      "file": "trials/20260815__trapezoid_period_6__20260815205501_trial_002_tracking_duration.npz",
+      "sha256": "a4e3688552e36a1fa6fe550daee70c8008088c69f427a63c89b838ce52f8fcaa",
+      "bytes": 354424
+    },
+    {
+      "file": "trials/20260815__trapezoid_period_6__20260815205548_trial_003_tracking_duration.npz",
+      "sha256": "b1ec7965465ed40a3bd9f33e3e5fc70eb46750b5f127a2b1b2752625e7c8e4f3",
+      "bytes": 352417
+    },
+    {
+      "file": "trials/20260815__trapezoid_period_8__20260815201840_trial_001_tracking_duration.npz",
+      "sha256": "e452655e772cf3c6276b4ecf629b6d66efa7ea0870dd2748a6041f1903202599",
+      "bytes": 355832
+    },
+    {
+      "file": "trials/20260815__trapezoid_period_8__20260815201924_trial_002_tracking_duration.npz",
+      "sha256": "30600dc70e14855d93bbd6b9c34476e027d653ecc606444de25e43a69c205b07",
+      "bytes": 354112
+    },
+    {
+      "file": "trials/20260815__trapezoid_period_8__20260815202009_trial_003_tracking_duration.npz",
+      "sha256": "b9d681996a5b69d0ba6d38aef0249aa8f666fab4c9ed47b02f7f8da769e51592",
+      "bytes": 354197
+    },
+    {
+      "file": "trials/20260815__triangle_period_6__20260815204555_trial_001_tracking_duration.npz",
+      "sha256": "a7a62fec7734fe2fa47370a8dc5d1b9355b71b9c064d7e8c0b6adf1e7fafa696",
+      "bytes": 353759
+    },
+    {
+      "file": "trials/20260815__triangle_period_6__20260815204645_trial_002_tracking_duration.npz",
+      "sha256": "83db2aa5752785778bcd5ae33eca4b8aa8823312655eefe91e10b5a614934c11",
+      "bytes": 355442
+    },
+    {
+      "file": "trials/20260815__triangle_period_6__20260815204723_trial_003_tracking_duration.npz",
+      "sha256": "82c0767c0d46c6c5cd2b422e5b62b174f42c4b25b5c23af0915668e02f2ecc44",
+      "bytes": 355908
+    },
+    {
+      "file": "trials/20260815__triangle_period_8__20260815201037_trial_001_tracking_duration.npz",
+      "sha256": "67543af0683c73ba8642c8b01a76a04167f26ac098f17912a396add467f809db",
+      "bytes": 355783
+    },
+    {
+      "file": "trials/20260815__triangle_period_8__20260815201121_trial_002_tracking_duration.npz",
+      "sha256": "e9a9eb47d2ef0bc8de5c2e09e1fbd0c9d0d97d21309772c381764cfe5ad1229f",
+      "bytes": 355871
+    },
+    {
+      "file": "trials/20260815__triangle_period_8__20260815201206_trial_003_tracking_duration.npz",
+      "sha256": "1afe24dcfce8137591651c1f228d9e9d1e204b18e21ccae237ae5485d9ff4b80",
+      "bytes": 356081
+    },
+    {
+      "file": "trials/20260817__constant_015__20260817214857_trial_001_tracking_duration.npz",
+      "sha256": "15e18cd0f350ea79fb3374bebaabb79e9803c369525c38a353ed0b639a4ecf68",
+      "bytes": 343593
+    },
+    {
+      "file": "trials/20260817__constant_015__20260817214937_trial_002_tracking_duration.npz",
+      "sha256": "6a23f074401051cfabb2c81b0da8a4b16b9bf3f09b4296e5e1d40c3534c50f74",
+      "bytes": 340657
+    },
+    {
+      "file": "trials/20260817__constant_015__20260817215044_trial_003_tracking_duration.npz",
+      "sha256": "7fea9fc07a68c11797c23911605043cb2ab8e2a14922cbe5ef41e019f0b11151",
+      "bytes": 340114
+    },
+    {
+      "file": "trials/20260817__constant_035__20260817213005_trial_001_tracking_duration.npz",
+      "sha256": "4d632ec25f7b60fcb40779c036ceb89222cd225091bd9dd46150e8ad8ed38864",
+      "bytes": 340952
+    },
+    {
+      "file": "trials/20260817__constant_035__20260817213059_trial_002_tracking_duration.npz",
+      "sha256": "4413b63341e1bd9413f55c10158e08279c1d745f6588bb802a24e30e704fd95c",
+      "bytes": 337899
+    },
+    {
+      "file": "trials/20260817__constant_035__20260817213147_trial_003_tracking_duration.npz",
+      "sha256": "c711abca4d6077861dfa3e3ef74cd8635baf609dadc906b93a32048ae9c6d144",
+      "bytes": 336055
+    },
+    {
+      "file": "trials/20260817__constant_055__20260817214000_trial_001_tracking_duration.npz",
+      "sha256": "bd5c6d6053d7328468e5dac17a9d788186bb18beb9a2f4e5ada0d36cc4dcfc3a",
+      "bytes": 347678
+    },
+    {
+      "file": "trials/20260817__constant_055__20260817214046_trial_002_tracking_duration.npz",
+      "sha256": "aa36835894889cf1bed175aa1e437d68107528e10ef2acf30406dd659716c636",
+      "bytes": 350483
+    },
+    {
+      "file": "trials/20260817__constant_055__20260817214102_trial_003_solver_fallback.npz",
+      "sha256": "8b2c6cab05b6a1c06846f4e4a57913479f7b598ef3e7b0fbdee3e0204f1a5912",
+      "bytes": 67088
+    },
+    {
+      "file": "trials/20260817__sine_period_8__20260817220124_trial_001_tracking_duration.npz",
+      "sha256": "d62b8c0ecda8600f18cbaed5411878833c4c7b33b3533e8a57275abd826bb2f4",
+      "bytes": 354189
+    },
+    {
+      "file": "trials/20260817__sine_period_8__20260817220343_trial_003_tracking_duration.npz",
+      "sha256": "8069b21f1097ebf70399784075a1cdfec43cb864deccc79f99459a6747273ab7",
+      "bytes": 355634
+    },
+    {
+      "file": "trials/20260817__trapezoid_period_8__20260817222433_trial_001_tracking_duration.npz",
+      "sha256": "1552aac87208c1a878188630f619cc532092522c865693fe17e27ebad5eafaef",
+      "bytes": 353979
+    },
+    {
+      "file": "trials/20260817__triangle_period_8__20260817221148_trial_001_tracking_duration.npz",
+      "sha256": "5904882df9c54ac4d65bb0ff4844743c5fe512d4bf818818a7272a482d3244ba",
+      "bytes": 354312
+    },
+    {
+      "file": "trials/20260817__triangle_period_8__20260817221232_trial_002_tracking_duration.npz",
+      "sha256": "4d4ce2aac2c18209c1db31fead73aba78751ee0e2f57ac920bd4a0bab0031bdf",
+      "bytes": 353841
+    },
+    {
+      "file": "trials/20260817__triangle_period_8__20260817221315_trial_003_tracking_duration.npz",
+      "sha256": "b500d4344e5ba7602c7bf1f6586d66249c63c04c8d3bbd7c7d8ca77b4a6a9391",
+      "bytes": 355641
+    },
+    {
+      "file": "trials/20260818__constant_015__20260818211544_trial_001_tracking_duration.npz",
+      "sha256": "f839ac290308b05e028919737cb52e207d566b57911f34af09079de16532aa6e",
+      "bytes": 350685
+    },
+    {
+      "file": "trials/20260818__constant_015__20260818211622_trial_002_tracking_duration.npz",
+      "sha256": "cf518939a90b69449e8c33c58acbcdd45a397e1aa4f1d6b2f3f46e219150bc78",
+      "bytes": 351237
+    },
+    {
+      "file": "trials/20260818__constant_015__20260818211709_trial_003_tracking_duration.npz",
+      "sha256": "0313ab18bc125bc978949e270db606870b7fcb9ac23e9915e4435711bd4eb40d",
+      "bytes": 349184
+    },
+    {
+      "file": "trials/20260818__constant_035__20260818205451_trial_001_tracking_duration.npz",
+      "sha256": "a22e899d11966bbbbf8c3599acb091389fd87bd4591cb8fc630cde2f7fc9142f",
+      "bytes": 350643
+    },
+    {
+      "file": "trials/20260818__constant_035__20260818205545_trial_002_tracking_duration.npz",
+      "sha256": "d55d9e6c2481cb81e798e4f15c12039102cac82d2044d9c4e6abeed13247fc7e",
+      "bytes": 349801
+    },
+    {
+      "file": "trials/20260818__constant_035__20260818205632_trial_003_tracking_duration.npz",
+      "sha256": "75829ef6ed3dc5383a86c5e8366a8bd951db060745622b94979d54e6fc243c13",
+      "bytes": 348391
+    },
+    {
+      "file": "trials/20260818__sine_period_8__20260818212412_trial_001_solver_fallback.npz",
+      "sha256": "36520e9d1ae80685838b8d83b678cdcaf64c42b26df0013776fd118c48c20621",
+      "bytes": 147424
+    },
+    {
+      "file": "trials/20260818__sine_period_8__20260818212458_trial_002_tracking_duration.npz",
+      "sha256": "dd0289662a906e66f57e56a61283af8e69637b2ace5cf8ef9e0085144d1ca9c2",
+      "bytes": 354289
+    },
+    {
+      "file": "trials/20260818__trapezoid_period_8__20260818214224_trial_003_tracking_duration.npz",
+      "sha256": "7357d87012c6e0765307859711ccb317b1e632dc1bf8dae58cf42ca1ac142de8",
+      "bytes": 355150
+    },
+    {
+      "file": "trials/20260818__triangle_period_8__20260818213334_trial_001_tracking_duration.npz",
+      "sha256": "9a585120a0de0485789c7933cb0643db5bd421ee0d4ea2fb5a49da361f403f4e",
+      "bytes": 354872
+    },
+    {
+      "file": "trials/20260818__triangle_period_8__20260818213417_trial_002_tracking_duration.npz",
+      "sha256": "98b9bd94110e85d25e09a9529002cec6791fdd75e0d4bfec69b700180551a1c8",
+      "bytes": 354546
+    },
+    {
+      "file": "trials/20260819_01__constant_015__20260819210137_trial_001_tracking_duration.npz",
+      "sha256": "8b163a6e94330db38a23664c87e82f90fa156353a470d6530d009bdd58200fd9",
+      "bytes": 339741
+    },
+    {
+      "file": "trials/20260819_01__constant_015__20260819210218_trial_002_tracking_duration.npz",
+      "sha256": "7232d62d27bdd1bcc157b33f0710b1ca60bfbd3be90d9f0ebe0eb92958f6bbff",
+      "bytes": 339212
+    },
+    {
+      "file": "trials/20260819_01__constant_015__20260819210255_trial_003_tracking_duration.npz",
+      "sha256": "c9a36cba04966fea9229058b904effefcc1dd353c66096e6c5d57cf17b04b17d",
+      "bytes": 341992
+    },
+    {
+      "file": "trials/20260819_01__constant_035__20260819204238_trial_001_tracking_duration.npz",
+      "sha256": "ab67863304381f969f676e94a9016c4afa94475b9a94dd97cff67cc3f404843e",
+      "bytes": 340816
+    },
+    {
+      "file": "trials/20260819_01__constant_035__20260819204333_trial_002_tracking_duration.npz",
+      "sha256": "e574f00bbd068c61267f169fcb450c3c38816690be7897d9576ad2f576ca37c2",
+      "bytes": 336790
+    },
+    {
+      "file": "trials/20260819_01__constant_035__20260819204416_trial_003_tracking_duration.npz",
+      "sha256": "06fce93ae9850ed727f8228376c06a0459ff17f5a2397314b1e26fc1947ac3e8",
+      "bytes": 339158
+    },
+    {
+      "file": "trials/20260819_01__constant_055__20260819205033_trial_002_tracking_duration.npz",
+      "sha256": "7de6877803fb316cac569d5cf09a28271810b8f0ec6a82cbc2bab03ec8774e46",
+      "bytes": 342961
+    },
+    {
+      "file": "trials/20260819_01__sine_period_8__20260819211037_trial_001_tracking_duration.npz",
+      "sha256": "90466f901d921ec82fdad87bae1da4e350aeb236244c21a998f3e406c6678379",
+      "bytes": 355127
+    },
+    {
+      "file": "trials/20260819_01__sine_period_8__20260819211116_trial_002_tracking_duration.npz",
+      "sha256": "63a90c1c761050b5a7c747a419ca091c53f9fbd56430f52f060507e092b969d3",
+      "bytes": 353963
+    },
+    {
+      "file": "trials/20260819_01__sine_period_8__20260819211156_trial_003_tracking_duration.npz",
+      "sha256": "4f81e8cffe08d371cc92e0cea9bf7a489034a4414ad9d2f93dd4d374123276ed",
+      "bytes": 355874
+    },
+    {
+      "file": "trials/20260819_01__trapezoid_period_8__20260819212655_trial_001_tracking_duration.npz",
+      "sha256": "18a34b99ce556517fe460ff2c868a65b4798a8707b020af56c2e216eecbdab99",
+      "bytes": 353932
+    },
+    {
+      "file": "trials/20260819_01__trapezoid_period_8__20260819212731_trial_003_solver_fallback.npz",
+      "sha256": "edab489a7b3aff2c392054ed58909677e00b83fda96d9e0df634fa3d3cb7a7ef",
+      "bytes": 52002
+    },
+    {
+      "file": "trials/20260819_01__triangle_period_8__20260819211824_trial_001_tracking_duration.npz",
+      "sha256": "ce9087c36577b6e298a4ed2e9ad236e5f7717a3949a17e470b8bbb27dff3b21f",
+      "bytes": 354422
+    },
+    {
+      "file": "trials/20260819_01__triangle_period_8__20260819211920_trial_002_tracking_duration.npz",
+      "sha256": "1b495de9036c995e31c84a74bcb7693e6007c30b8502c27213c6220cfe4a6edf",
+      "bytes": 355329
+    },
+    {
+      "file": "trials/20260819_01__triangle_period_8__20260819211959_trial_003_tracking_duration.npz",
+      "sha256": "d46d8a737417ce76666804639d7ff95265a6a859c02f82701d26d988e9dde41c",
+      "bytes": 350401
+    },
+    {
+      "file": "trials/20260819_02__constant_015__20260819215304_trial_001_tracking_duration.npz",
+      "sha256": "2d656201ec319c03f10775270592216ee82394a16e541657cfec929a8008c17c",
+      "bytes": 339819
+    },
+    {
+      "file": "trials/20260819_02__constant_015__20260819215346_trial_002_tracking_duration.npz",
+      "sha256": "40a6e27b89e03c1fb65a694dc407bcf39f79abf0fa03fb249c9cb76f28080a69",
+      "bytes": 339797
+    },
+    {
+      "file": "trials/20260819_02__constant_015__20260819215446_trial_004_tracking_duration.npz",
+      "sha256": "0aed26dbec838a2fc8e3b59749dd24f223f3ddf9c6c9d1ab86a45a11092f1a05",
+      "bytes": 340282
+    },
+    {
+      "file": "trials/20260819_02__constant_035__20260819213701_trial_001_tracking_duration.npz",
+      "sha256": "8b2a2eb08e41df036f2328649e31da4da98308f98846b83e9bd29b37b2869dac",
+      "bytes": 338200
+    },
+    {
+      "file": "trials/20260819_02__constant_035__20260819213746_trial_002_tracking_duration.npz",
+      "sha256": "8e237c669ecdfd8383978d64e4b7c19b36b84079901fedc970fbc71ca95c9da5",
+      "bytes": 339447
+    },
+    {
+      "file": "trials/20260819_02__constant_035__20260819213823_trial_003_tracking_duration.npz",
+      "sha256": "20c8d95ecffbebccb6759c3b5eace99fc0631c1bd4b585976f49de80b408479f",
+      "bytes": 343188
+    },
+    {
+      "file": "trials/20260819_02__constant_055__20260819214353_trial_001_tracking_duration.npz",
+      "sha256": "ac6fc4a5b769f5aed36fad19a5eb1a06d98f25e121b9eb93390df183507dfc02",
+      "bytes": 336814
+    },
+    {
+      "file": "trials/20260819_02__constant_055__20260819214438_trial_002_tracking_duration.npz",
+      "sha256": "85c5157bf534645b2a78ad6e7cec5c84c539f2d8915f9b695c6671da9af9954a",
+      "bytes": 345945
+    },
+    {
+      "file": "trials/20260819_02__constant_055__20260819214502_trial_003_solver_fallback.npz",
+      "sha256": "01c204ac94ee46a49c0097a912fc03922687de50c94295441fc3dc79f8c34b37",
+      "bytes": 115863
+    },
+    {
+      "file": "trials/20260819_02__sine_period_8__20260819220144_trial_001_tracking_duration.npz",
+      "sha256": "12c09899e2b19ff64231432ab4974b1d72ab11624cd9022c7f3f4ca4448e9ae9",
+      "bytes": 354860
+    },
+    {
+      "file": "trials/20260819_02__sine_period_8__20260819220228_trial_002_tracking_duration.npz",
+      "sha256": "71371aa03d40e1e92cd9ff71432465a8ad31404729d89bc23731f47066bd099b",
+      "bytes": 354631
+    },
+    {
+      "file": "trials/20260819_02__sine_period_8__20260819220311_trial_003_tracking_duration.npz",
+      "sha256": "3c6c0a8a1a80be276f049e16ed30db8e5e3ac4aba718f490f6edc158bfe8fd07",
+      "bytes": 354103
+    },
+    {
+      "file": "trials/20260819_02__trapezoid_period_8__20260819222200_trial_001_tracking_duration.npz",
+      "sha256": "0b39494f29fd91089715611700a723263a73559887afab092c90e34e78d1248c",
+      "bytes": 346512
+    },
+    {
+      "file": "trials/20260819_02__trapezoid_period_8__20260819222242_trial_002_tracking_duration.npz",
+      "sha256": "5d7b2cfda138307ed96dff31f62e98426231c431a14692fcf21cd824c2c61bb4",
+      "bytes": 353064
+    },
+    {
+      "file": "trials/20260819_02__trapezoid_period_8__20260819222322_trial_003_tracking_duration.npz",
+      "sha256": "d7aec1996bd5979f86f5f193199864e4e694ba0c9f0443102fcf9093644340ce",
+      "bytes": 353928
+    },
+    {
+      "file": "trials/20260819_02__triangle_period_8__20260819221254_trial_001_tracking_duration.npz",
+      "sha256": "715a3b9b8230314a632b8c3fed60dab2763913ce41581f94a2d170204cdc5201",
+      "bytes": 353074
+    },
+    {
+      "file": "trials/20260819_02__triangle_period_8__20260819221332_trial_002_tracking_duration.npz",
+      "sha256": "6ceff7cf3c3116e6c8475e5d042311a0c71377a1da3f912a1f5a5fb27ebf68c6",
+      "bytes": 355941
+    },
+    {
+      "file": "trials/20260819_02__triangle_period_8__20260819221415_trial_003_tracking_duration.npz",
+      "sha256": "4750bba882ecaec8378b713b39a6529690bdd2f6839fa99cca9e87179ece200a",
+      "bytes": 352261
+    },
+    {
+      "file": "trials/20260819_03__constant_015__20260819225502_trial_001_tracking_duration.npz",
+      "sha256": "b31572b0d0e71b0b47a2ddff3768416b8917c11055f967dc586d5506e64ac51b",
+      "bytes": 340283
+    },
+    {
+      "file": "trials/20260819_03__constant_015__20260819225541_trial_002_tracking_duration.npz",
+      "sha256": "d4a6e49e4e137d1bced33b4a7605e73a9747751d91ec383dd80fc9a1e3d4c0d9",
+      "bytes": 338626
+    },
+    {
+      "file": "trials/20260819_03__constant_015__20260819225616_trial_003_tracking_duration.npz",
+      "sha256": "186de27186aefc7ad9ba070192072d8f7d9e6b8e52990d171ca6f887da6ebfa4",
+      "bytes": 339754
+    },
+    {
+      "file": "trials/20260819_03__constant_055__20260819224108_trial_001_tracking_duration.npz",
+      "sha256": "531ffacd0df697007ba50585f447bd9a182dd770ed5a90777398af973b6a061c",
+      "bytes": 341061
+    },
+    {
+      "file": "trials/20260819_03__constant_055__20260819224152_trial_002_tracking_duration.npz",
+      "sha256": "279104f9828b64e19a66cab11cc63df8794ada56d9d7ad0676d2c0130f14b16d",
+      "bytes": 351336
+    },
+    {
+      "file": "trials/20260819_03__trapezoid_period_8__20260819230203_trial_001_solver_fallback.npz",
+      "sha256": "15cac2d6b4445edb4af3396dc0628539df45b767ef9eac0fdd9e6fc26fe23950",
+      "bytes": 124461
+    },
+    {
+      "file": "trials/20260819_03__trapezoid_period_8__20260819230242_trial_002_tracking_duration.npz",
+      "sha256": "7ed8a5f3679ca1a50112f1a952f8a384e314eb08f5721d57ec9a7833b706fdff",
+      "bytes": 353768
+    },
+    {
+      "file": "trials/20260819_03__trapezoid_period_8__20260819230319_trial_003_tracking_duration.npz",
+      "sha256": "37d5094a413345e32132161e63577f91b76ec950a2f376892ff347b761990c53",
+      "bytes": 353677
+    }
+  ],
+  "split_counts": {
+    "train": 79,
+    "validation": 6,
+    "test": 6,
+    "stress": 5
+  },
+  "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+  "manifest_sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+  "manifest_preserved": true
+}

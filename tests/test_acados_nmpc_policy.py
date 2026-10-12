@@ -82,7 +82,11 @@ def fake_controller(monkeypatch):
     monkeypatch.setattr(policy_module, "AcadosNMPCController", FakeController)
 
 
-def make_cfg(*, predictor: bool = False) -> AcadosNMPCPolicyCfg:
+def make_cfg(
+    *,
+    predictor: bool = False,
+    predictor_velocity_response: bool = True,
+) -> AcadosNMPCPolicyCfg:
     data = {
         "solver": {"n_horizon": 2, "qp_solver_cond_N": 2},
         "constraints": {"max_acc": 5.0, "max_velocity": 0.0},
@@ -91,7 +95,7 @@ def make_cfg(*, predictor: bool = False) -> AcadosNMPCPolicyCfg:
             "delay_step": 1 if predictor else 0,
             "max_acc": "auto",
             "max_velocity": "auto",
-            "velocity_response_enabled": True,
+            "velocity_response_enabled": predictor_velocity_response,
             "velocity_response_tau_s": 0.155,
             "velocity_response_gain": 0.86,
             "velocity_response_bias": -0.0035,
@@ -193,3 +197,24 @@ def test_active_predictor_requires_identical_response_parameters():
     cfg.state_predictor.velocity_response_gain = 0.9
     with pytest.raises(ValueError, match="mismatched field.*gain"):
         AcadosNMPCPolicy(cfg, 1, "cpu", 1.0 / 60.0, raw_observation_fields=fields(3))
+
+
+def test_active_predictor_may_disable_response_without_changing_ocp_parameters():
+    cfg = make_cfg(predictor=True, predictor_velocity_response=False)
+    cfg.state_predictor.velocity_response_gain = 0.9
+    cfg.state_predictor.velocity_response_max_abs_velocity = 0.5
+    policy = AcadosNMPCPolicy(
+        cfg,
+        1,
+        "cpu",
+        1.0 / 60.0,
+        raw_observation_fields=fields(3),
+    )
+
+    action = policy.act(observation(1, 3))
+
+    assert action[0, 0].item() == pytest.approx(0.02)
+    assert policy.controller.last_states[0, 3] == pytest.approx(0.0)
+    assert policy.controller.last_parameters[0, :, 2] == pytest.approx([0.155] * 3)
+    assert policy.controller.last_parameters[0, :, 3] == pytest.approx([0.86] * 3)
+    assert policy.controller.last_parameters[0, :, 4] == pytest.approx([-0.0035] * 3)

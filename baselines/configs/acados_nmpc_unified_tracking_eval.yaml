@@ -9,5 +9,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/acados_nmpc_unified_tracking
+  root_dir: logs/acados_nmpc_unified_tracking_new_response/icra
   run_name: acados_nmpc_unified_mixed

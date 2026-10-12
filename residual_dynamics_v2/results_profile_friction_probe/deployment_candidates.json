@@ -1,0 +1,339 @@
+{
+  "candidates": {
+    "profile_only": {
+      "best_validation_score": 0.9288649136217864,
+      "checkpoint": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics_v2/results_profile_friction_probe/checkpoints/profile_only.pt",
+      "checkpoint_sha256": "f6a6659bda8ac7c427473689393a9f61671634a113fe8d50f51134a114b29d1f",
+      "epochs": {
+        "stage1": 52,
+        "stage2": 50
+      },
+      "friction_enabled": false,
+      "metrics": {
+        "stress": {
+          "integral": {
+            "h12": {
+              "rmse_mps2": 0.41756536935588867
+            },
+            "h3": {
+              "rmse_mps2": 0.5788413686187939
+            },
+            "h6": {
+              "rmse_mps2": 0.5387760505639946
+            }
+          },
+          "point": {
+            "bias": -0.047840883732946815,
+            "count": 2446,
+            "mae": 0.26887400071270984,
+            "prediction_abs_max": 0.17077593029388327,
+            "prediction_abs_p95": 0.16389951056269075,
+            "prediction_std": 0.08147775137608013,
+            "r2": 0.06898851653058946,
+            "rmse": 0.4103370755571968
+          },
+          "rollout": {
+            "h12": {
+              "count": 418,
+              "pb_rmse_m": 0.01809402680664901,
+              "theta_bias_rad": 0.00044108612114546794,
+              "vb_rmse_mps": 0.11761468781312666,
+              "vrz_bias_mps": 0.004671740413840753
+            },
+            "h33": {
+              "count": 418,
+              "pb_rmse_m": 0.05114265020824457,
+              "theta_bias_rad": 0.0006860821123975858,
+              "vb_rmse_mps": 0.14353300321887794,
+              "vrz_bias_mps": 0.005470775213517701
+            },
+            "h60": {
+              "count": 418,
+              "pb_rmse_m": 0.10102927146394242,
+              "theta_bias_rad": 0.001310939037201479,
+              "vb_rmse_mps": 0.1821104043658876,
+              "vrz_bias_mps": 0.002784664932838217
+            }
+          }
+        },
+        "test": {
+          "integral": {
+            "h12": {
+              "rmse_mps2": 0.20327386051039611
+            },
+            "h3": {
+              "rmse_mps2": 0.3313754714295555
+            },
+            "h6": {
+              "rmse_mps2": 0.29457661712858796
+            }
+          },
+          "point": {
+            "bias": 0.026873632195646726,
+            "count": 10616,
+            "mae": 0.09475486032728316,
+            "prediction_abs_max": 0.15967682983364445,
+            "prediction_abs_p95": 0.07747247292428427,
+            "prediction_std": 0.03800752022536091,
+            "r2": 0.048340845143620026,
+            "rmse": 0.20317620123957378
+          },
+          "rollout": {
+            "h12": {
+              "count": 2028,
+              "pb_rmse_m": 0.00848194040632805,
+              "theta_bias_rad": 0.0006728109480357732,
+              "vb_rmse_mps": 0.051749441876149424,
+              "vrz_bias_mps": -0.0006634239721280968
+            },
+            "h33": {
+              "count": 2028,
+              "pb_rmse_m": 0.024705478206506846,
+              "theta_bias_rad": 0.0019506030041728044,
+              "vb_rmse_mps": 0.07062465829935516,
+              "vrz_bias_mps": -0.0008739265077470559
+            },
+            "h60": {
+              "count": 2028,
+              "pb_rmse_m": 0.052507306386377,
+              "theta_bias_rad": 0.003688875126147188,
+              "vb_rmse_mps": 0.09567391304557435,
+              "vrz_bias_mps": -0.001012987448674934
+            }
+          }
+        },
+        "validation": {
+          "integral": {
+            "h12": {
+              "rmse_mps2": 0.165896455404273
+            },
+            "h3": {
+              "rmse_mps2": 0.2287563855126551
+            },
+            "h6": {
+              "rmse_mps2": 0.2107250392627367
+            }
+          },
+          "point": {
+            "bias": 0.012794709086173316,
+            "count": 10618,
+            "mae": 0.07634399862612605,
+            "prediction_abs_max": 0.14300263951444944,
+            "prediction_abs_p95": 0.0801532749491351,
+            "prediction_std": 0.04877846954160819,
+            "r2": 0.10753448770107021,
+            "rmse": 0.12675477960493928
+          },
+          "rollout": {
+            "h12": {
+              "count": 2048,
+              "pb_rmse_m": 0.008540456926757537,
+              "theta_bias_rad": 0.0008034503761521415,
+              "vb_rmse_mps": 0.05985355875320576,
+              "vrz_bias_mps": -0.002236840783934767
+            },
+            "h33": {
+              "count": 2048,
+              "pb_rmse_m": 0.023807276990627093,
+              "theta_bias_rad": 0.002612619113062406,
+              "vb_rmse_mps": 0.06454821354363838,
+              "vrz_bias_mps": -0.0029110666398855433
+            },
+            "h60": {
+              "count": 2048,
+              "pb_rmse_m": 0.046817829089626006,
+              "theta_bias_rad": 0.005098856810651852,
+              "vb_rmse_mps": 0.0883325413964771,
+              "vrz_bias_mps": -0.0028028747722787517
+            }
+          }
+        }
+      },
+      "profile_enabled": true
+    },
+    "profile_plus_friction": {
+      "best_validation_score": 0.9236790266308037,
+      "checkpoint": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics_v2/results_profile_friction_probe/checkpoints/profile_plus_friction.pt",
+      "checkpoint_sha256": "e12529b0b5e62e1b6984392ee55a042defbc20aa3fdb6e4c9e8be5a94eca9530",
+      "epochs": {
+        "stage1": 52,
+        "stage2": 50
+      },
+      "friction_enabled": true,
+      "metrics": {
+        "stress": {
+          "integral": {
+            "h12": {
+              "rmse_mps2": 0.4212776330497515
+            },
+            "h3": {
+              "rmse_mps2": 0.5816768261385586
+            },
+            "h6": {
+              "rmse_mps2": 0.5415550010266732
+            }
+          },
+          "point": {
+            "bias": -0.04279139459796231,
+            "count": 2446,
+            "mae": 0.27223455541823094,
+            "prediction_abs_max": 0.1965639002479597,
+            "prediction_abs_p95": 0.16691140311931324,
+            "prediction_std": 0.08000637133867845,
+            "r2": 0.043124457270321326,
+            "rmse": 0.41599773617477254
+          },
+          "rollout": {
+            "h12": {
+              "count": 418,
+              "pb_rmse_m": 0.01795448844711854,
+              "theta_bias_rad": 0.00044108612114546794,
+              "vb_rmse_mps": 0.11663830742726787,
+              "vrz_bias_mps": 0.004671740413840753
+            },
+            "h33": {
+              "count": 418,
+              "pb_rmse_m": 0.05037693390963344,
+              "theta_bias_rad": 0.0006860821123975858,
+              "vb_rmse_mps": 0.14279539148968873,
+              "vrz_bias_mps": 0.005470775213517701
+            },
+            "h60": {
+              "count": 418,
+              "pb_rmse_m": 0.0977995276344026,
+              "theta_bias_rad": 0.001310939037201479,
+              "vb_rmse_mps": 0.17717416813299616,
+              "vrz_bias_mps": 0.002784664932838217
+            }
+          }
+        },
+        "test": {
+          "integral": {
+            "h12": {
+              "rmse_mps2": 0.20451622240929063
+            },
+            "h3": {
+              "rmse_mps2": 0.3320058637282244
+            },
+            "h6": {
+              "rmse_mps2": 0.29557822592756244
+            }
+          },
+          "point": {
+            "bias": 0.026730777919574684,
+            "count": 10616,
+            "mae": 0.09473485527864607,
+            "prediction_abs_max": 0.2007224784859208,
+            "prediction_abs_p95": 0.07584631061211654,
+            "prediction_std": 0.04051790210433127,
+            "r2": 0.02941498201889492,
+            "rmse": 0.20518656109989966
+          },
+          "rollout": {
+            "h12": {
+              "count": 2028,
+              "pb_rmse_m": 0.00839284092365161,
+              "theta_bias_rad": 0.0006728109480357732,
+              "vb_rmse_mps": 0.051121845866858105,
+              "vrz_bias_mps": -0.0006634239721280968
+            },
+            "h33": {
+              "count": 2028,
+              "pb_rmse_m": 0.024018825878522172,
+              "theta_bias_rad": 0.0019506030041728044,
+              "vb_rmse_mps": 0.06858152811643704,
+              "vrz_bias_mps": -0.0008739265077470559
+            },
+            "h60": {
+              "count": 2028,
+              "pb_rmse_m": 0.04970589843773902,
+              "theta_bias_rad": 0.003688875126147188,
+              "vb_rmse_mps": 0.09041558961430572,
+              "vrz_bias_mps": -0.001012987448674934
+            }
+          }
+        },
+        "validation": {
+          "integral": {
+            "h12": {
+              "rmse_mps2": 0.1684262220101909
+            },
+            "h3": {
+              "rmse_mps2": 0.23115734520349454
+            },
+            "h6": {
+              "rmse_mps2": 0.213069567144457
+            }
+          },
+          "point": {
+            "bias": 0.013439240763507198,
+            "count": 10618,
+            "mae": 0.07623656569923978,
+            "prediction_abs_max": 0.17189552800326852,
+            "prediction_abs_p95": 0.08251838998629045,
+            "prediction_std": 0.050871961545878266,
+            "r2": 0.05881400540738213,
+            "rmse": 0.130168635144583
+          },
+          "rollout": {
+            "h12": {
+              "count": 2048,
+              "pb_rmse_m": 0.008473189620024177,
+              "theta_bias_rad": 0.0008034503761521415,
+              "vb_rmse_mps": 0.059371008697390905,
+              "vrz_bias_mps": -0.002236840783934767
+            },
+            "h33": {
+              "count": 2048,
+              "pb_rmse_m": 0.02336438487430514,
+              "theta_bias_rad": 0.002612619113062406,
+              "vb_rmse_mps": 0.0634840532587459,
+              "vrz_bias_mps": -0.0029110666398855433
+            },
+            "h60": {
+              "count": 2048,
+              "pb_rmse_m": 0.04498423594683135,
+              "theta_bias_rad": 0.005098856810651852,
+              "vb_rmse_mps": 0.0853300300829953,
+              "vrz_bias_mps": -0.0028028747722787517
+            }
+          }
+        }
+      },
+      "profile_enabled": true
+    }
+  },
+  "config_hash": "38053cc7a282ebc75647030e0a5f19ad270e82554807d287735bdde45c463700",
+  "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+  "formula_version": "rbf_profile_friction_v1",
+  "other_candidates_retrained": false,
+  "runtime": {
+    "numpy_version": "1.26.4",
+    "torch_version": "2.8.0+cu129"
+  },
+  "schema_version": 1,
+  "settings": {
+    "batch_size": 256,
+    "blackbox_limit_mps2": 0.25,
+    "center_count": 13,
+    "coulomb_limit_mps2": 0.15,
+    "delta_limit_rad": 0.035,
+    "kappa_limit": 0.1,
+    "output_limit_mps2": 0.25,
+    "seed": 7,
+    "stage1_epochs": 80,
+    "stage1_steps": 16,
+    "stage2_epochs": 50,
+    "stage2_steps": 8,
+    "validation_windows": 512,
+    "velocity_transition_mps": 0.025,
+    "viscous_limit_sinv": 0.5,
+    "width_m": 0.065
+  },
+  "source_probe_summary": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics_v2/results_profile_friction_probe/summary.json",
+  "source_probe_summary_sha256": "0ccc1c18a5a20736c5269c067a9c0b0f8c24d41b85bfc74a3d7910cf1e5574b0",
+  "training_performed": [
+    "profile_only",
+    "profile_plus_friction"
+  ]
+}

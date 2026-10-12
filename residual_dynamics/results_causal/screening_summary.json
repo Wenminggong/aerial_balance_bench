@@ -1,0 +1,189 @@
+{
+  "initial_candidates": [
+    {
+      "candidate": "jacobian_off",
+      "h33_causal_pb_rmse_m": 0.007056768231805368,
+      "h33_causal_score": 0.6480762302240537,
+      "h33_causal_vb_rmse_mps": 0.019371141644846275,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": true,
+        "jacobian_p99": false,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": false,
+      "jacobian_max_mps2": 0.028703642705492395,
+      "jacobian_norm_limit_mps2": 0.02,
+      "jacobian_p99_mps2": 0.028130891629940907,
+      "jacobian_weight": 0.0,
+      "residual_rmse_mps2": 0.04867818623108054,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed7_1048fc75_20260819_161151",
+      "run_name": "mlp5_seed7_1048fc75_20260819_161151",
+      "seed": 7
+    },
+    {
+      "candidate": "lmax_0p01",
+      "h33_causal_pb_rmse_m": 0.007112771718888859,
+      "h33_causal_score": 0.6635690967786032,
+      "h33_causal_vb_rmse_mps": 0.019852826091538663,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": true,
+        "jacobian_p99": false,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": false,
+      "jacobian_max_mps2": 0.01971846935486455,
+      "jacobian_norm_limit_mps2": 0.01,
+      "jacobian_p99_mps2": 0.019220577221878973,
+      "jacobian_weight": 0.1,
+      "residual_rmse_mps2": 0.04563945986329612,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed7_9a7b1674_20260819_161232",
+      "run_name": "mlp5_seed7_9a7b1674_20260819_161232",
+      "seed": 7
+    },
+    {
+      "candidate": "lmax_0p02",
+      "h33_causal_pb_rmse_m": 0.007029712867177074,
+      "h33_causal_score": 0.6429897744821291,
+      "h33_causal_vb_rmse_mps": 0.019288671839487806,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": true,
+        "jacobian_p99": false,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": false,
+      "jacobian_max_mps2": 0.02719120645279666,
+      "jacobian_norm_limit_mps2": 0.02,
+      "jacobian_p99_mps2": 0.026636076269640138,
+      "jacobian_weight": 0.1,
+      "residual_rmse_mps2": 0.04791475354400212,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed7_1f5710e2_20260819_161324",
+      "run_name": "mlp5_seed7_1f5710e2_20260819_161324",
+      "seed": 7
+    },
+    {
+      "candidate": "lmax_0p04",
+      "h33_causal_pb_rmse_m": 0.007056768231805368,
+      "h33_causal_score": 0.6480762302240537,
+      "h33_causal_vb_rmse_mps": 0.019371141644846275,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": true,
+        "jacobian_p99": true,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": true,
+      "jacobian_max_mps2": 0.028703642705492395,
+      "jacobian_norm_limit_mps2": 0.04,
+      "jacobian_p99_mps2": 0.028130891629940907,
+      "jacobian_weight": 0.1,
+      "residual_rmse_mps2": 0.04867818623108054,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed7_e53cabc6_20260819_161415",
+      "run_name": "mlp5_seed7_e53cabc6_20260819_161415",
+      "seed": 7
+    }
+  ],
+  "initial_seed": 7,
+  "schema_version": 1,
+  "screening_budget": {
+    "early_stopping_patience": 20,
+    "max_epochs": 80,
+    "steps_per_epoch": 16,
+    "validation_max_windows": 1024
+  },
+  "screening_selected_candidate": "lmax_0p04",
+  "seed_repetitions": [
+    {
+      "candidate": "lmax_0p04",
+      "h33_causal_pb_rmse_m": 0.006376076070211805,
+      "h33_causal_score": 0.5222793335873062,
+      "h33_causal_vb_rmse_mps": 0.017009987731920185,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": false,
+        "jacobian_p99": false,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": false,
+      "jacobian_max_mps2": 0.0929578515414946,
+      "jacobian_norm_limit_mps2": 0.04,
+      "jacobian_p99_mps2": 0.07655399557239878,
+      "jacobian_weight": 0.1,
+      "residual_rmse_mps2": 0.04548341751759749,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed7_6a2da960_20260819_161504",
+      "run_name": "mlp5_seed7_6a2da960_20260819_161504",
+      "seed": 7
+    },
+    {
+      "candidate": "lmax_0p04",
+      "h33_causal_pb_rmse_m": 0.0067041294080882234,
+      "h33_causal_score": 0.5816931769913499,
+      "h33_causal_vb_rmse_mps": 0.018182386104924217,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": true,
+        "jacobian_p99": true,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": true,
+      "jacobian_max_mps2": 0.059570535416859915,
+      "jacobian_norm_limit_mps2": 0.04,
+      "jacobian_p99_mps2": 0.04862041960092444,
+      "jacobian_weight": 0.1,
+      "residual_rmse_mps2": 0.045880206032637386,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed17_c73613c0_20260819_162217",
+      "run_name": "mlp5_seed17_c73613c0_20260819_162217",
+      "seed": 17
+    },
+    {
+      "candidate": "lmax_0p04",
+      "h33_causal_pb_rmse_m": 0.006652614953178115,
+      "h33_causal_score": 0.5678980177644283,
+      "h33_causal_vb_rmse_mps": 0.017700646924048977,
+      "hard_filters": {
+        "command_queue_alignment": true,
+        "dynamic_rollout_degradation": true,
+        "jacobian_max": true,
+        "jacobian_p99": true,
+        "residual_rmse": true,
+        "response_chain": true
+      },
+      "hard_filters_passed": true,
+      "jacobian_max_mps2": 0.043714124560545374,
+      "jacobian_norm_limit_mps2": 0.04,
+      "jacobian_p99_mps2": 0.04143264488324468,
+      "jacobian_weight": 0.1,
+      "residual_rmse_mps2": 0.04524622629005438,
+      "run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed27_f2474141_20260819_162857",
+      "run_name": "mlp5_seed27_f2474141_20260819_162857",
+      "seed": 27
+    }
+  ],
+  "seed_stability_passed": false,
+  "selected_candidate": null,
+  "selected_run_dir": null,
+  "selected_screening_run_dir": "/home/wenminggong/projects/human_robot_collaborative_transportation/aerial_balance_bench/residual_dynamics/runs/training_causal/mlp5_seed7_e53cabc6_20260819_161415",
+  "selection_rule": "Reject Jacobian/residual/dynamic/response failures, then minimize the normalized h33 causal pb/vb rollout score.",
+  "v1_baseline": {
+    "h30_pb_rmse_m": 0.003952446972838658,
+    "h30_vb_rmse_mps": 0.013262927839549677,
+    "note": "Teacher-forced v1.0 baseline; target semantics differ from causal rollout.",
+    "residual_rmse_mps2": 0.04444828611744965,
+    "run_name": "mlp5_seed7_8777501a_20260816_171018",
+    "seed": 7
+  }
+}

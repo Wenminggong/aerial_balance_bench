@@ -1,0 +1,12 @@
+{
+  "forward_bitwise_equal": true,
+  "sampling_bitwise_equal": true,
+  "batch_bitwise_equal": true,
+  "loss_and_gradients_bitwise_equal": true,
+  "losses": {
+    "0.0": 0.3224825179247165,
+    "0.5": 1.4809580314701876
+  },
+  "train_windows": 136964,
+  "old_best_validation_score": 0.9236790266308037
+}

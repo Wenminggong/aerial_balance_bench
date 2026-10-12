@@ -469,13 +469,11 @@ class AcadosNMPCPolicy(BasePolicy):
             predictor.velocity_response_max_abs_velocity = 0.0
 
     def _validate_predictor_response_match(self) -> None:
-        if not self.state_predictor.active:
+        if (
+            not self.state_predictor.active
+            or not self.state_predictor.velocity_response_enabled
+        ):
             return
-        if not self.state_predictor.velocity_response_enabled:
-            raise ValueError(
-                "An active AcadosNMPCPolicy state predictor must enable velocity_response_enabled "
-                "because the OCP models that response."
-            )
         pairs = {
             "tau_s": (float(self.cfg.response.tau_s), self.state_predictor.velocity_response_tau_s),
             "gain": (float(self.cfg.response.gain), self.state_predictor.velocity_response_gain),

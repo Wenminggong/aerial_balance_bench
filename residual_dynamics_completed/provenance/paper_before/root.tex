@@ -1,0 +1,1030 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
+
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
+
+\IEEEoverridecommandlockouts                              % This command is only needed if 
+                                                          % you want to use the \thanks command
+
+\overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+%In case you encounter the following error:
+%Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+%Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+%This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+%Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+%\pdfobjcompresslevel=0
+%\pdfminorversion=4
+
+% See the \addtolength command later in the file to balance the column lengths
+% on the last page of the document
+
+% The following packages can be found on http:\\www.ctan.org
+\usepackage{graphicx} % for pdf, bitmapped graphics files
+%\usepackage{epsfig} % for postscript graphics files
+%\usepackage{mathptmx} % assumes new font selection scheme installed
+%\usepackage{times} % assumes new font selection scheme installed
+\usepackage{amsmath} % assumes amsmath package installed
+\usepackage{multirow}
+%\usepackage{amssymb}  % assumes amsmath package installed
+\makeatletter
+\let\NAT@parse\undefined
+\makeatother
+\usepackage[backref]{hyperref}
+
+\title{\LARGE \bf
+From Balancing to Tracking: Predictive Control with Structured Residual Dynamics for Indirect Drone-Ball Manipulation
+}
+
+
+\author{Mingjiang Liu$^{1}$, Xiaozhen Zhang$^{1}$, Stephen L. Smith$^{2}$, and Hailong Huang$^{1}$% <-this % stops a space
+% \thanks{*This work was supported by the Research Centre for Low Altitude Economy (RCLAE), The Hong Kong Polytechnic University.}% <-this % stops a space
+\thanks{$^{1}$Mingjiang Liu, Xiaozhen Zhang, and Hailong Huang are with the Department of Aeronautical and Aviation Engineering, The Hong Kong Polytechnic University, Hong Kong, China}
+\thanks{$^{2}$Stephen L. Smith is with the Department of Electrical and Computer Engineering, University of Waterloo, Waterloo, Canada}
+}
+
+
+\begin{document}
+
+
+
+\maketitle
+\thispagestyle{empty}
+\pagestyle{empty}
+
+
+%==============================================================================
+\begin{abstract}
+Indirect drone-ball manipulation is sensitive to actuation delay and model mismatch because the ball moves
+freely along the beam. This paper presents a unified predictive-control framework for target-position balancing
+and trajectory tracking by treating balancing as constant-reference tracking. The
+augmented nominal model combines ball-beam dynamics with an identified first-order-plus-dead-time low-level
+actuation response, while a state predictor handles pending
+commands. To address real-system mismatch, we learn a bounded and smooth ball-acceleration
+residual composed of a position-dependent beam-profile correction and a friction-inspired dissipative term. The
+same frozen residual is used in both the state predictor and nonlinear model predictive controller (NMPC). In
+ideal simulation, nominal NMPC yields lower errors than a nonlinear feedforward--feedback (NFFB) baseline for
+every tested task. On held-out real-world data, the structured residual reduces position and velocity root mean
+square error (RMSE) by
+$19.7\%$ and $20.8\%$ over a one-second causal rollout. In physical experiments, residual-aware NMPC reduces
+overall steady-state error by $55.2\%$ for constant targets and overall mean absolute error (MAE) by $31.1\%$ for
+dynamic references, while raising response gain from $0.855$ to $0.950$. These results show that
+structured residual dynamics improve control-relevant state prediction and closed-loop accuracy on the tested
+system.
+
+
+
+\end{abstract}
+
+% Reserve the next column top (the first-page right column) for the task illustration.
+\suppressfloats[t]
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/task_illustration_paper.pdf}
+    \caption{Illustration of the indirect drone-ball trajectory tracking setup. By moving vertically, the tethered drone changes
+    the beam inclination to guide the freely rolling ball along a desired position trajectory
+    (purple dashed line). Snapshots at $t_1$--$t_4$ illustrate the system's temporal evolution,
+    with earlier states shown more transparently.}
+    \label{fig:task_illustration}
+\end{figure}
+
+
+%==============================================================================
+\section{INTRODUCTION}
+Beyond mobility and sensing, aerial robots are increasingly expected to physically interact with and alter 
+their environments through manipulation. Aerial manipulation is therefore a key  direction for broadening 
+operational scope and practical utility of aerial robots~\cite{ollero2022past}. Recent work has advanced direct
+aerial manipulation in precision, versatility, and autonomy. Representative systems have demonstrated
+millimeter-level pick and peg-in-hole operations~\cite{wang2024millimeter}, enabled writing and pick-and-place
+through a common end-effector-centric framework~\cite{he2025flyingHand}, and integrated flight and manipulation
+for autonomous grasping, perching, door opening, and transport~\cite{wu2026handLike}. Despite these advances,
+these systems largely follow a direct-interaction paradigm: an onboard arm or gripper acts on an object that is
+then rigidly coupled to the end effector or engaged with a largely stationary or quasi-static contact target.
+
+Tool use in nature illustrates how acting through an intermediate object can extend an animal's
+physical capabilities. New Caledonian crows manufacture hooked tools to extract prey~\cite{hunt1996manufacture},
+have been observed bending wire into hooks to retrieve food containers~\cite{weir2002shaping},
+and can use tools sequentially to obtain other tools before reaching food~\cite{wimpenny2009cognitive}.
+These behaviors motivate a complementary direction for aerial robotics: extending physical interaction
+through tools and intermediate mechanisms. Beyond selecting, constructing, and sequencing tools,
+a central control problem is how to use a given tool to regulate object motion. This becomes
+indirect dynamic aerial manipulation when aerial actuation drives an intermediate mechanism
+while the object retains its own dynamics. Aerial-Balance-Bench provides a controlled and reproducible
+testbed for this execution problem with a fixed tool~\cite{liu2026aerialBalanceBench}: a vertically
+constrained tethered drone tilts a beam to guide a freely rolling ball toward a target position
+or along a reference trajectory, as illustrated in Fig.~\ref{fig:task_illustration}.
+The ball is neither grasped by nor rigidly attached to the drone;
+its motion is controlled through the beam. Although simplified relative to unconstrained flight,
+the setup retains the coupling among aerial actuation, tool motion, and object dynamics.
+
+Aerial-Balance-Bench also leaves two control questions open. First, although it defined two tasks, its
+reference controllers were evaluated only on target-position balancing in simulation and on the real system.
+It therefore did not show whether one controller can cover static regulation and dynamic trajectory tracking
+under a common formulation. Second, its delay-aware state predictor compensated for the identified command
+latency, but control remained based on nominal ball-beam dynamics. The physical experiments showed lower
+performance at off-center targets, indicating that unmodeled or nonideal dynamics continued to affect the
+closed loop~\cite{liu2026aerialBalanceBench}. For dynamic references, such mismatch can accumulate over a
+prediction horizon and appear as tracking error, steady offset, or reduced response amplitude.
+
+These observations lead to the central question of this work: can one predictive controller handle both constant
+and time-varying references while reducing the effects of real-system model mismatch? To answer this question,
+we first express target-position balancing as the constant-reference case of a unified trajectory-tracking problem.
+We then develop a nonlinear model predictive controller (NMPC) based on augmented nominal dynamics that include
+the identified first-order-plus-dead-time (FOPDT) low-level actuation response. The first-order velocity response
+is introduced as an augmented model state, whereas the dead time is handled by propagating the measured state
+through the pending command history. NMPC starts from this delay-compensated predicted state and uses reference
+preview over its horizon.
+
+Even with the augmented nominal model, some real ball-beam effects remain unmodeled. We therefore construct a
+structured residual for the ball acceleration from real-system data. It combines a ball-position-dependent beam
+profile correction with a friction-inspired dissipative residual. Both terms are kept bounded and smooth so that
+the residual can be evaluated and differentiated throughout real-time prediction. Crucially, the same residual
+model is integrated into both the delay state predictor and the NMPC prediction model. This defines the
+residual-aware predictive controller and keeps the short delay-compensation rollout consistent with the following
+NMPC horizon. Comparing it with nominal predictive control tests whether better control-related dynamics
+prediction leads to more accurate closed-loop balancing and tracking in this system.
+
+The main contributions of this work are summarized as three folds:
+\begin{itemize}
+    \item We formulate target-position balancing and dynamic trajectory tracking as one reference-tracking
+    problem and develop a unified NMPC based on augmented nominal dynamics, including an identified FOPDT
+    low-level actuation response.
+    \item We construct a bounded and smooth structured residual dynamics model for the drone-ball system and
+    integrate it consistently into the delay state predictor and NMPC, yielding residual-aware predictive control.
+    \item We conduct a three-part evaluation showing that the unified NMPC outperforms NFFB in ideal simulation,
+    the structured residual improves causal multi-step prediction on real data, and residual-aware NMPC improves
+    real-world balancing and trajectory tracking over nominal NMPC while retaining real-time feasibility.
+\end{itemize}
+
+The rest of the paper is organized as follows. Section~\ref{sec:related_work} reviews related work.
+Section~\ref{sec:problem_formulation} presents the unified task formulation and augmented nominal dynamics.
+Section~\ref{sec:residual_aware_control} introduces the structured residual dynamics and their integration into
+predictive control. Section~\ref{sec:experiments} evaluates unified tracking in simulation, offline prediction
+on real data, and real-world closed-loop performance. Section~\ref{sec:conclusions} concludes the paper.
+
+
+%==============================================================================
+\section{Related Work}
+\label{sec:related_work}
+\subsection{Aerial Manipulation}
+Aerial manipulation has primarily relied on onboard arms or grippers for direct object interaction. A hardware
+benchmark compared representative platforms in accuracy, execution time, manipulation capability, and impact
+response~\cite{2020_ral_benchmarks_for_aerial_manipulation}. Recent advances include predictive optimization for
+millimeter-level pick and peg-in-hole operations~\cite{wang2024millimeter}; robust control and whole-body planning
+for omnidirectional manipulation at arbitrary base orientations~\cite{2025_ijrr_omnidirectional_aerial_manipulator};
+the end-effector-centric Flying Hand framework for teleoperated and learned tasks~\cite{he2025flyingHand}; onboard
+perception and soft gripping for high-speed grasping of static and moving targets~\cite{2024_npj_robotics_aerial_grasp};
+and HI-ARM's integrated flight and hand-like grasping for autonomous multi-task
+interaction~\cite{wu2026handLike}. Cooperative direct manipulation has also progressed: FlyingToolbox enables
+vertically stacked MAVs to exchange tools with sub-centimeter docking accuracy despite strong
+downwash~\cite{cao2025proximal}. Flexible connections provide another approach. RotorTM models the full-system and
+slack-taut hybrid dynamics of cable-suspended loads~\cite{2023_tro_rotortm}. Impact-aware planning and hybrid NMPC
+handle cable-mode transitions~\cite{2024_tro_impact_aware_payloads}. Multi-robot cable suspension supports
+six-degree-of-freedom physical human-robot collaborative manipulation~\cite{2024_tro_human_aware_payload_transportation},
+while online whole-body kinodynamic planning and tension-aware control enable agile cooperative load manipulation
+through narrow passages~\cite{sun2025agile}. At the benchmark level, AIR-VLA addresses long-horizon
+vision-language-action tasks for arm-equipped aerial systems~\cite{2026_arxiv_air_vla}, whereas
+Aerial-Balance-Bench targets indirect dynamic manipulation~\cite{liu2026aerialBalanceBench}. Unlike most settings
+above, where the object is grasped or physically connected to the robot, Aerial-Balance-Bench considers a ball that moves freely
+along a beam and is controlled indirectly by the drone, broadening the task scope of aerial manipulation. However,
+its reference controllers neither unified balancing and trajectory tracking within one framework nor addressed
+real-system model mismatch. This work targets these two gaps.
+
+\subsection{Learning-Augmented Dynamics for Control}
+Learning-augmented control compensates for effects that are difficult to model from first principles. Neural
+Lander augments nominal dynamics with a neural residual for near-ground aerodynamic effects~\cite{shi2019neural}.
+Neural-Swarm2 learns inter-vehicle aerodynamic interactions for swarm planning and
+control~\cite{shi2021neural}. Data-driven MPC uses Gaussian-process residuals for high-speed quadrotor
+tracking~\cite{torrente2021data}. Real-time Neural MPC embeds high-capacity neural dynamics models in online
+optimization~\cite{salzmann2023real}. Other approaches adapt during deployment. Neural-Fly learns a shared
+aerodynamic representation offline and updates low-dimensional coefficients online for changing
+winds~\cite{o2022neural}. Uncertainty-aware MPC combines offline and online dynamics learning while selecting
+actions that improve both control and data collection~\cite{saviolo2023active}. Simultaneous system identification
+and MPC learns unknown dynamics from closed-loop data with dynamic-regret guarantees~\cite{zhou2025simultaneous}.
+These studies primarily learn vehicle-side aerodynamic effects, whereas we target mismatch in the
+manipulated-object dynamics. We construct a control-oriented residual that encodes task-relevant physical
+structure and use it consistently in both delay-aware state prediction and NMPC.
+
+
+%==============================================================================
+\section{Problem Formulation}
+\label{sec:problem_formulation}
+\subsection{Unified Task Formulation}
+The system considered in this work follows the physical configuration of
+Aerial-Balance-Bench~\cite{liu2026aerialBalanceBench}. For the tasks considered here, a rope connects the drone to
+one end of a beam whose opposite end remains stationary, and the drone is constrained to vertical translation.
+The resulting vertical motion changes the beam inclination and thereby regulates the
+motion of a ball along the beam. Let $p_b(t)$ denote
+the ball position measured along the beam and let $\theta(t)$ denote the beam inclination. We define the feasible
+ball-motion interval and the reference interval as
+\begin{equation}
+    \mathcal{P}=[p_{\min},p_{\max}], \qquad
+    \mathcal{P}_g\subset\mathcal{P},
+    \label{eq:feasible_ball_interval}
+\end{equation}
+where $p_b(t)\in\mathcal{P}$ during normal task execution and $\mathcal{P}_g$ leaves a safety margin from the beam
+ends. This constrained setup does not represent arbitrary three-dimensional flight, but it retains the main
+coupling among drone vertical motion, beam inclination, and ball motion.
+
+Aerial-Balance-Bench defines two task families: target-position balancing and trajectory tracking. We represent both 
+with a common desired ball-position signal \(p_g(t)\). For an evaluation interval $t\in[0,T]$, the reference is assumed 
+to be available at the current time and over the required prediction horizon. We define the unified reference
+$p_g\colon[0,T]\rightarrow\mathcal{P}_g$ as
+\begin{equation}
+    p_g(t)=
+    \begin{cases}
+        p_g^\star, & \text{target-position balancing},\\
+        p_g^{\mathrm{tr}}(t), & \text{trajectory tracking}.
+    \end{cases}
+    \label{eq:unified_position_reference}
+\end{equation}
+where $p_g^\star$ is a constant target and $p_g^{\mathrm{tr}}(t)$ is a bounded time-varying reference. The same
+definition therefore covers static regulation and dynamic tracking without changing the task variables.
+
+The common position-tracking error is $e_p(t)$. We measure task performance by the normalized
+position error over the evaluation interval and require the ball to remain within the feasible beam region:
+\begin{equation}
+\begin{aligned}
+    e_p(t) &= p_b(t)-p_g(t),\\
+    J_{\mathrm{task}}
+    &=\frac{1}{T}\int_{0}^{T}|e_p(t)|\,\mathrm{d}t,
+\end{aligned}
+    \label{eq:unified_task_objective}
+\end{equation}
+with $p_b(t)\in\mathcal{P}$ throughout the evaluation. For a constant reference, the ideal regulation condition
+is
+\begin{equation}
+    p_g(t)\equiv p_g^\star
+    \quad\Longrightarrow\quad
+    \lim_{t\rightarrow\infty}|p_b(t)-p_g^\star|=0.
+    \label{eq:balancing_special_case}
+\end{equation}
+Thus, target-position balancing is the constant-reference case of the unified task, whereas a nonconstant
+$p_g(t)$ gives trajectory tracking under the same error and performance measure. The controller should minimize
+$J_{\mathrm{task}}$ while keeping the ball in the valid beam region.
+
+
+\subsection{Augmented Nominal Dynamics}
+We retain the hierarchical velocity-control framework of Aerial-Balance-Bench~\cite{liu2026aerialBalanceBench}.
+The high-level controller regulates the ball by generating a desired vertical velocity for the drone, and the
+low-level controller tracks this command. Let $c_z$ and $v_{rz}$ denote the commanded and actual drone vertical
+velocities, respectively. At each sampling time $t_k$, the high-level action instantaneously updates the held
+velocity command:
+\begin{equation}
+    u_k=\Delta c_{z,k}, \qquad
+    c_z(t_k^+)=c_z(t_k^-)+u_k,
+    \label{eq:incremental_velocity_command}
+\end{equation}
+where $t_k^-$ and $t_k^+$ denote the instants immediately before and after the update, respectively. The updated
+command is held until the next sampling time.
+The ball-beam dynamics are driven by $v_{rz}$ rather than directly by $c_z$. It is therefore necessary to model
+the low-level actuation response between these two signals. The framework proposed in Aerial-Balance-Bench modeled this
+response primarily as an action delay; here, we additionally capture its gradual first-order behavior.
+
+We now combine the ball-beam dynamics and actuation response in one augmented model. Let $L$ and $l_r$ be the
+beam and rope lengths, respectively, and let $d_b$ map the benchmark ball coordinate to the physical coordinate
+along the beam. The ball has mass $m_b$, radius $r_b$, and rotational inertia $J_b$, and we define
+$\gamma=m_b/(m_b+J_b/r_b^2)$. The augmented state and effective delayed command are
+\begin{equation}
+\begin{aligned}
+    \mathbf x(t)
+    &=\begin{bmatrix}
+        p_b(t)&v_b(t)&\theta(t)&v_{rz}(t)&c_z(t)
+    \end{bmatrix}^{\!\top},\\
+    c_z^d(t)&=c_z(t-T_d),
+\end{aligned}
+    \label{eq:augmented_nominal_state}
+\end{equation}
+where $T_d$ is the response dead time. From the rope geometry, the rope angle $\beta$ and beam angular velocity $\omega$ are
+\begin{equation}
+\begin{aligned}
+    \beta(\theta)&=\arcsin\!\left[\frac{L}{l_r}(1-\cos\theta)\right],\\
+    \omega(\theta,v_{rz})&=-\frac{v_{rz}\cos\beta(\theta)}
+    {L\cos\!\left(\beta(\theta)-\theta\right)}.
+\end{aligned}
+    \label{eq:beam_geometry}
+\end{equation}
+The corresponding nominal ball acceleration is
+\begin{equation}
+    a_b^{\mathrm{nom}}(p_b,\theta,v_{rz})
+    =\gamma(p_b+d_b-L)\omega^2(\theta,v_{rz})-\gamma g\sin\theta.
+    \label{eq:nominal_ball_acceleration}
+\end{equation}
+The low-level response is modeled by a first-order-plus-dead-time (FOPDT) relation, with time constant $\tau$,
+steady-state gain $K$, and velocity bias $b$. The complete augmented nominal dynamics are
+\begin{equation}
+    \dot{\mathbf x}(t)
+    =\mathbf f^{\mathrm{nom}}
+    \!\left(\mathbf x(t),c_z^d(t)\right)
+    =
+    \begin{bmatrix}
+        v_b(t)\\[1mm]
+        a_b^{\mathrm{nom}}\!\left(p_b(t),\theta(t),v_{rz}(t)\right)\\[1mm]
+        \omega\!\left(\theta(t),v_{rz}(t)\right)\\[1mm]
+        \displaystyle\frac{Kc_z^d(t)+b-v_{rz}(t)}{\tau}\\[2mm]
+        0
+    \end{bmatrix}.
+    \label{eq:augmented_nominal_dynamics}
+\end{equation}
+The second and third rows describe the coupled ball and beam motion, while the fourth row makes the actual drone
+velocity an explicit dynamic state. The last row implements the zero-order hold described in
+\eqref{eq:incremental_velocity_command}. Here, $p_b$ uses the benchmark coordinate, and $v_{rz}>0$ denotes upward
+motion.
+
+For a sampling interval $h$, $c_{z,k}^d$ is constant within one integration stage. Defining
+$\bar v_{rz,k}=Kc_{z,k}^d+b$ and $a_\tau=e^{-h/\tau}$, the exact response over $s\in[0,h]$ is
+\begin{equation}
+\begin{aligned}
+    v_{rz,k}(s)
+    &=\bar v_{rz,k}+
+    \left(v_{rz,k}-\bar v_{rz,k}\right)e^{-s/\tau},\\
+    v_{rz,k+1}
+    &=a_\tau v_{rz,k}+
+    (1-a_\tau)\bar v_{rz,k}.
+\end{aligned}
+    \label{eq:exact_fopdt_response}
+\end{equation}
+The first three rows of \eqref{eq:augmented_nominal_dynamics} are integrated with RK4 using this exact response at
+the start, midpoint, and end of each sampling interval. This construction defines the discrete transition maps
+used below.
+
+We identified the response model from 26 physical pseudo-random binary sequence (PRBS) trials collected at
+60~Hz. We compared four structures: unit gain with delay (UGD), gain and bias with delay (GBD), first order
+without delay (FO), and FOPDT. Each was fitted causally over complete response
+sequences and evaluated by leave-one-trial-out validation, as shown in
+Fig.~\ref{fig:velocity_response_identification}. In the upward-positive
+coordinate used here, each dynamic fit was initialized with the first measured velocity and then rolled out
+without injecting later velocity measurements. The reported errors therefore evaluate sequence response rather
+than one-step regression. The pooled FOPDT parameters are
+\begin{equation}
+\begin{aligned}
+    T_d &=0.0722~\mathrm{s}, & \tau&=0.1874~\mathrm{s},\\
+    K   &=1.0135,           & b&=-0.00485~\mathrm{m/s}.
+\end{aligned}
+    \label{eq:identified_fopdt_parameters}
+\end{equation}
+FOPDT achieved the lowest mean held-out RMSE of $0.01659$~m/s, compared with $0.02459$~m/s for the next-best
+FO model, $0.03971$~m/s for GBD, and $0.05754$~m/s for UGD. This ordering indicates that modeling the gradual
+first-order response provides the main improvement over the pure-delay models, while retaining explicit dead time
+yields a further gain. We therefore use FOPDT in the
+augmented nominal dynamics.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.5\textwidth]{figures/velocity_response_model_comparison.pdf}
+    \caption{Comparison of four low-level vertical-velocity response models over 26 physical PRBS trials. Bars and error bars show means and sample standard deviations across trials, respectively.
+    Training fit denotes a separate fit to each trial, while held-out trial denotes leave-one-trial-out prediction.}
+    \label{fig:velocity_response_identification}
+\end{figure}
+
+
+
+%==============================================================================
+\section{Structured Residual-Aware Predictive Control}
+\label{sec:residual_aware_control}
+\subsection{Structured Residual Dynamics}
+The augmented nominal dynamics capture the main system geometry and the identified low-level actuation response,
+but they cannot represent every effect in the physical ball-beam system. Small variations in the effective beam
+profile, assembly, and energy dissipation can accumulate during fast and precise ball motion. In the real-world
+experiments of Aerial-Balance-Bench, larger steady-state errors and degraded control performance were observed at
+targets away from the beam center~\cite{liu2026aerialBalanceBench}. This target-dependent behavior indicates that
+position-dependent unmodeled effects remain relevant. We therefore aim to improve control-related prediction
+without claiming to recover the exact physical sources of the mismatch.
+
+Residual augmentation has improved real-world aerial-robot control in several
+settings~\cite{shi2019neural,torrente2021data,salzmann2023real}. In this system, we augment the nominal ball
+acceleration with a learned residual to compensate for task-specific model mismatch. Rather than
+learning an unrestricted function of the full augmented state, we impose a compact, physically structured form
+that captures position-dependent and dissipative effects while remaining suitable for NMPC.
+
+Accordingly, the residual-aware ball acceleration is
+\begin{equation}
+    a_b^{\mathrm{res}}(p_b,v_b,\theta,v_{rz})=a_b^{\mathrm{nom}}(p_b,\theta,v_{rz})+r_a(p_b,v_b,\theta),
+    \label{eq:structured_residual_dynamics}
+\end{equation}
+where $r_a(p_b,v_b,\theta)$ denotes the residual acceleration term. This correction leaves the nominal beam
+geometry, FOPDT velocity-response state, and command state unchanged.
+
+We construct $r_a$ from two physically motivated components. The first accounts for position-dependent variation
+in the effective local beam slope. Let $\delta\theta(p_b)$ denote the learned slope correction at ball position
+$p_b$. The resulting correction to the gravity-driven ball acceleration is
+\begin{equation}
+    r_{\mathrm{prof}}(p_b,\theta)
+    =-\gamma g\!\left[
+    \sin\!\bigl(\theta+\delta\theta(p_b)\bigr)-\sin\theta\right].
+    \label{eq:profile_residual}
+\end{equation}
+Thus, $r_{\mathrm{prof}}$ modifies the gravity projection through an effective slope change rather than adding an
+arbitrary position-dependent acceleration bias.
+
+The second component represents position-dependent dissipative effects:
+\begin{equation}
+    r_{\mathrm{diss}}(p_b,v_b)
+    =-f_c(p_b)\tanh\!\left(\frac{v_b}{v_0}\right)-f_v(p_b)v_b.
+    \label{eq:dissipative_residual}
+\end{equation}
+Here, $f_c(p_b)$ is a Coulomb-like acceleration magnitude in m/s$^2$, $f_v(p_b)$ is a viscous coefficient in
+s$^{-1}$, and $v_0=0.025$~m/s sets the smooth transition around zero velocity. Constraining $f_c$ and $f_v$ to
+be nonnegative ensures that $r_{\mathrm{diss}}$ opposes the ball motion.
+
+Suppressing their arguments for compactness, the two components are combined and smoothly bounded as
+\begin{equation}
+\begin{aligned}
+    r_a^{\mathrm{raw}}&=r_{\mathrm{prof}}+r_{\mathrm{diss}},\\
+    r_a&=\bar r_a\tanh\!\left(\frac{r_a^{\mathrm{raw}}}{\bar r_a}\right).
+\end{aligned}
+    \label{eq:structured_residual_components}
+\end{equation}
+Here, $r_a^{\mathrm{raw}}$ is the unconstrained sum, while $\bar r_a=0.25$~m/s$^2$ sets the residual-acceleration
+limit. The outer hyperbolic tangent makes the applied residual bounded and smooth for real-time differentiation.
+
+We parameterize $\delta\theta$, $f_c$, and $f_v$ using shared normalized Gaussian radial basis functions (RBFs).
+Let $M$ denote the number of bases, $\mu_i$ their centers, $\sigma_p$ their common width, and $\epsilon>0$ a
+small constant in the normalization denominator. The bases and the three position-dependent quantities are
+\begin{equation}
+\begin{aligned}
+    \phi_i(p_b)
+    &=\exp\!\left[-\frac{(p_b-\mu_i)^2}{2\sigma_p^2}\right],\\
+    \bar\phi_i(p_b)
+    &=\frac{\phi_i(p_b)}
+    {\epsilon+\sum_{j=1}^{M}\phi_j(p_b)},\\
+    \delta\theta(p_b)
+    &=\sum_{i=1}^{M}w_i^p\bar\phi_i(p_b),\\
+    \begin{bmatrix}f_c(p_b)\\ f_v(p_b)\end{bmatrix}
+    &=\sum_{i=1}^{M}\bar\phi_i(p_b)
+    \begin{bmatrix}w_i^c\\ w_i^v\end{bmatrix}.
+\end{aligned}
+    \label{eq:normalized_position_rbf}
+\end{equation}
+Here, $\phi_i$ is the $i$th Gaussian basis and $\bar\phi_i$ is its normalized value. We use $M=13$, place
+$\mu_i$ uniformly over the valid beam region, and set $\sigma_p=0.065$~m and
+$\epsilon=10^{-12}$. The coefficients $w_i^p$, $w_i^c$, and $w_i^v$ respectively parameterize the slope
+correction, Coulomb-like magnitude, and viscous coefficient. We impose
+$|w_i^p|\leq\bar\delta_\theta$ with $\bar\delta_\theta=0.035$~rad,
+$0\leq w_i^c\leq0.15$~m/s$^2$, and $0\leq w_i^v\leq0.50$~s$^{-1}$. These components remain structured
+approximations rather than identified measurements of the beam profile or friction forces.
+
+The residual parameters are learned offline from real closed-loop data. We form an acceleration-level training
+target using the ball acceleration $\hat a_b$ obtained by differentiating a smoothed ball-position signal:
+\begin{equation}
+    r_a^{\mathrm{data}}(t)
+    =\hat a_b(t)-a_b^{\mathrm{nom}}
+    \bigl(p_b(t),\theta(t),v_{rz}(t)\bigr).
+    \label{eq:residual_acceleration_target}
+\end{equation}
+The training objective combines four complementary terms:
+\begin{equation}
+    \mathcal L=
+    \underset{\text{pointwise fit}}{\underline{\lambda_{\mathrm{pt}}\mathcal L_{\mathrm{pt}}}}
+    +\underset{\text{integral consistency}}{\underline{\mathcal L_{\mathrm{int}}}}
+    +\underset{\text{RBF smoothness}}{\underline{\lambda_{\mathrm{sm}}\mathcal L_{\mathrm{sm}}}}
+    +\underset{\text{causal rollout}}{\underline{\lambda_{\mathrm{roll}}\mathcal L_{\mathrm{roll}}}}.
+    \label{eq:structured_residual_training_loss}
+\end{equation}
+Here, $\mathcal L_{\mathrm{pt}}$ is the pointwise Huber loss between $r_a$ and the target
+$r_a^{\mathrm{data}}$; $\mathcal L_{\mathrm{int}}$ enforces acceleration-integral consistency over
+$H\in\{3,6,12\}$; $\mathcal L_{\mathrm{sm}}$ promotes smooth spatial variation of the RBF-parameterized
+quantities; and $\mathcal L_{\mathrm{roll}}$ penalizes causal multi-step errors in predicted $p_b$ and $v_b$ over
+$H\in\{6,12,30,33\}$. The $\lambda$ coefficients set the relative weights of their corresponding terms. The
+first training stage sets $\lambda_{\mathrm{roll}}=0$, while the second enables the rollout term. After each
+update, the coefficients are projected onto the bounds above, and the final model is selected using validation
+rollout errors rather than pointwise acceleration error alone. All parameters are then frozen.
+
+
+\subsection{Residual-Aware Predictive Control}
+We retain the delay-aware control structure introduced in
+Aerial-Balance-Bench~\cite{liu2026aerialBalanceBench}: a model-based predictor propagates the measured state
+through the pending commands, and the high-level controller starts from the resulting delay-compensated state.
+Our extension is to use the same augmented structured-residual dynamics in both this state predictor and the high-level NMPC controler,
+as summarized in Fig.~\ref{fig:residual_aware_control_structure}. The delay queue remains confined to the state
+predictor and is not modeled again over the NMPC horizon.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/residual_aware_predictive_control_structure.pdf}
+    \caption{Residual-aware realization of the delay-aware control structure. The predictor advances the
+    measured state through the ordered pending-command queue over the pure-delay interval, and NMPC starts from
+    the resulting delay-compensated state with a time-aligned reference preview. Both the predictor and NMPC use
+    the same structured residual dynamics.}
+    \label{fig:residual_aware_control_structure}
+\end{figure*}
+
+\textit{1) Delay-aware state prediction:}
+The model-based predictor propagates the physical state
+$\boldsymbol{\xi}=[p_b,v_b,\theta,v_{rz}]^\top$ using the residual dynamics developed above. Let
+$\boldsymbol{\xi}_k^m=[p_{b,k}^m,v_{b,k}^m,\theta_k^m,v_{rz,k}^m]^\top$ be its measurement, and let $D$ be the
+integer delay horizon used by the controller, such that $T_d\approx Dh$. The ordered queue
+$\mathcal Q_k=\{q_{0|k},\ldots,q_{D-1|k}\}$ contains the accumulated velocity commands that will become effective
+over the next $D$ intervals, from oldest to newest. In particular, $q_{j|k}$ serves as the held delayed input
+$c_z^d$ over $[t_{k+j},t_{k+j+1})$; it is a velocity command rather than an increment $u_k$. The predictor computes
+\begin{equation}
+\begin{aligned}
+    \hat{\boldsymbol{\xi}}_{k|k}
+    &=\boldsymbol{\xi}_k^m,\\
+    \hat{\boldsymbol{\xi}}_{k+j+1|k}
+    &=\mathbf G_h^{\mathrm{res}}
+    \bigl(\hat{\boldsymbol{\xi}}_{k+j|k},q_{j|k}\bigr),
+    \quad j=0{:}D-1,\\
+    \tilde{\mathbf x}_{0|k}
+    &=\begin{bmatrix}
+        \hat{\boldsymbol{\xi}}_{k+D|k}^{\top}&c_z(t_k^-)
+    \end{bmatrix}^{\!\top}.
+\end{aligned}
+    \label{eq:delay_state_prediction}
+\end{equation}
+Here, $\mathbf G_h^{\mathrm{res}}$ is one discrete step of the first four rows of
+\eqref{eq:augmented_nominal_dynamics}, with $q_{j|k}$ substituted for $c_z^d$ and
+$a_b^{\mathrm{nom}}$ replaced by $a_b^{\mathrm{res}}$ from \eqref{eq:structured_residual_dynamics}. It uses the
+exact first-order velocity response and evaluates $r_a$ at every RK4 stage. The vector
+$\tilde{\mathbf x}_{0|k}$ is the delay-compensated NMPC initial state: its physical component is predicted to the
+end of the delay interval, whereas $c_z(t_k^-)$ is the current command accumulator before $u_k$ is applied. The
+predictor estimates no new parameters and performs no online update.
+
+Because the physical component of $\tilde{\mathbf x}_{0|k}$ corresponds to the end of the delay interval, the
+NMPC reference must be aligned with the same future time:
+\begin{equation}
+\begin{aligned}
+    p_{g,i|k}&=p_g\!\left(t_k+(D+i)h\right),\\
+    v_{g,i|k}&=v_g\!\left(t_k+(D+i)h\right),
+\end{aligned}
+    \label{eq:delay_aligned_reference}
+\end{equation}
+where $i=0{:}N$ applies to both references. The reference generator supplies $v_g$, which equals $\dot p_g$
+where the reference is differentiable. For
+piecewise trajectories, its discrete stage value is used directly. A constant target gives
+$p_{g,i|k}=p_g^\star$ and $v_{g,i|k}=0$. Thus, the raw preview must cover offsets $0$ through $D+N$. Pure delay
+is not modeled again inside the high-level optimal control problem (OCP).
+
+\textit{2) Residual-aware NMPC:}
+Using the five-dimensional state in \eqref{eq:augmented_nominal_state} and the scalar command increment in
+\eqref{eq:incremental_velocity_command}, the prediction model is
+\begin{equation}
+\begin{aligned}
+    \mathbf x_{0|k}&=\tilde{\mathbf x}_{0|k},\\
+    \mathbf x_{i+1|k}
+    &=\mathbf F_h^{\mathrm{res}}
+    \bigl(\mathbf x_{i|k},u_{i|k}\bigr),
+    \quad i=0{:}N-1.
+\end{aligned}
+    \label{eq:residual_aware_prediction_model}
+\end{equation}
+At each stage, $\mathbf F_h^{\mathrm{res}}$ first applies
+$c_{z,i|k}^{+}=c_{z,i|k}+u_{i|k}$ and then uses this updated command as the effective FOPDT input. The map combines
+the exact first-order response, RK4 integration, and the structured residual evaluated at each RK4 stage; the
+pure delay has already been consumed by the state predictor.
+
+The nonlinear least-squares residuals for a prediction stage and the terminal stage are
+\begin{equation}
+    \mathbf y_{i|k}
+    =\begin{bmatrix}
+        p_{b,i|k}-p_{g,i|k}\\
+        v_{b,i|k}-v_{g,i|k}\\
+        \theta_{i|k}\\
+        \omega_{i|k}\\
+        v_{rz,i|k}\\
+        c_{z,i|k}+u_{i|k}\\
+        u_{i|k}
+    \end{bmatrix},\qquad
+    \mathbf y_{N|k}^{e}
+    =\begin{bmatrix}
+        p_{b,N|k}-p_{g,N|k}\\
+        v_{b,N|k}-v_{g,N|k}\\
+        \theta_{N|k}\\
+        \omega_{N|k}\\
+        v_{rz,N|k}\\
+        c_{z,N|k}
+    \end{bmatrix}.
+    \label{eq:nmpc_tracking_residuals}
+\end{equation}
+They penalize ball tracking error, beam and drone motion, the updated velocity command, and the command increment.
+No separate action-jerk term is used. Let $\mathbf s_i^l,\mathbf s_i^u\geq\mathbf 0$ denote the lower- and
+upper-bound slack vectors for the soft constraints introduced below. The objective is defined as
+\begin{equation}
+\begin{aligned}
+    J_k
+    &=\frac{1}{2}\sum_{i=0}^{N-1}
+    \mathbf y_{i|k}^{\top}\mathbf W\mathbf y_{i|k}+\frac{1}{2}(\mathbf y_{N|k}^{e})^{\top}
+    \mathbf W_N\mathbf y_{N|k}^{e}+J_{\mathrm{slack}},\\
+    J_{\mathrm{slack}}
+    &=\sum_{i=0}^{N}\Bigl[
+    \rho_1\mathbf 1^\top(\mathbf s_i^l+\mathbf s_i^u)+\frac{\rho_2}{2}\left(\lVert\mathbf s_i^l\rVert_2^2
+    +\lVert\mathbf s_i^u\rVert_2^2\right)\Bigr],
+\end{aligned}
+    \label{eq:nmpc_tracking_objective}
+\end{equation}
+where $J_{\mathrm{slack}}$ applies linear and quadratic penalties to violations of both sides of the softened
+bounds. We use the diagonal weights
+\begin{equation}
+\begin{aligned}
+    \mathbf W&=\operatorname{diag}(20,4,0.1,0.2,0.2,0.05,0.25),\\
+    \mathbf W_N&=\operatorname{diag}(100,20,0.5,1,1,0.05).
+\end{aligned}
+    \label{eq:nmpc_tracking_weights}
+\end{equation}
+with $\rho_1=\rho_2=10^4$.
+Using these slacks, we soften the ball-position, beam-angle, and tracking-error bounds defined by
+$\mathbf h_{i|k}=[p_{b,i|k},\theta_{i|k},p_{b,i|k}-p_{g,i|k}]^\top$. The resulting OCP is
+\begin{equation}
+\begin{aligned}
+    \min_{\mathbf x,\mathbf u,\mathbf s^l,\mathbf s^u}\quad
+    &J_k\\
+    \mathrm{s.t.}\quad
+    &\mathbf x_{0|k}=\tilde{\mathbf x}_{0|k},\\
+    &\mathbf x_{i+1|k}=\mathbf F_h^{\mathrm{res}}
+    (\mathbf x_{i|k},u_{i|k}),\\
+    &-a_{\max}h\leq u_{i|k}\leq a_{\max}h,\\
+    &-v_{\max}\leq
+    \begin{bmatrix}v_{rz,i|k}\\c_{z,i|k}\end{bmatrix}
+    \leq v_{\max},\\
+    &\underline{\mathbf h}-\mathbf s_i^l
+    \leq\mathbf h_{i|k}
+    \leq\overline{\mathbf h}+\mathbf s_i^u,\\
+    &\mathbf s_i^l,\mathbf s_i^u\geq0.
+\end{aligned}
+    \label{eq:residual_aware_nmpc_ocp}
+\end{equation}
+The dynamics and input bounds hold for $i=0{:}N-1$, the velocity bounds for $i=1{:}N$, and the softened bounds
+for $i=0{:}N$. We use
+$\underline{\mathbf h}=[0,-40^\circ,-0.5]^\top$ and
+$\overline{\mathbf h}=[0.70,40^\circ,0.5]^\top$. The
+$v_{\max}$ bounds are imposed only when a positive velocity limit is configured; the input-increment bound is
+always hard.
+
+We use $N=30$ and $h=1/60$~s. The OCP is solved with acados~\cite{verschueren2022acados} using SQP-RTI,
+partial-condensing HPIPM, a Gauss-Newton Hessian approximation, and the discrete prediction map. The previous
+solution is shifted for warm starting, and only $u_k=u_{0|k}^{\star}$ is applied. A nonzero solver status,
+nonfinite result, or bound violation triggers $u_k=0$, which keeps the current accumulated command unchanged and
+is recorded as a fallback. The issued command then updates both the command accumulator and the delay queue.
+Using the same frozen residual in the predictor and NMPC keeps the two consecutive prediction intervals
+dynamically consistent.
+
+
+
+%=============================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+The experiments are organized around three research questions that examine unified control, control-relevant
+model prediction, and real-world closed-loop performance:
+\begin{itemize}
+\item \textbf{RQ1:} Can nominal NMPC solve both
+target-position balancing and trajectory tracking within the same framework, and how does it compare with a
+non-optimization-based baseline in ideal simulation? 
+\item \textbf{RQ2:} Does the structured residual
+improve control-relevant prediction over the nominal model on offline real-world data? 
+\item \textbf{RQ3:} Does residual-aware NMPC improve real-world target-position balancing and trajectory tracking over
+nominal NMPC while retaining real-time feasibility? 
+\end{itemize}
+
+\subsection{Unified Tracking in Ideal Simulation}
+
+\textit{1) Simulation settings:}
+We conduct the simulations in Aerial-Balance-Bench~\cite{liu2026aerialBalanceBench}, which is developed using
+Isaac Lab~\cite{2023_RAL_isaac_lab}. A geometric SE(3)
+controller~\cite{2010_SE3_controller} tracks the drone velocity commands at 60~Hz. Each controller is evaluated
+on 500 episodes of 20~s per reference type. Across
+episodes, the environment samples $D_{\mathrm{sim}}\in\{6,7,8,9,10\}$,
+$\tau_{\mathrm{sim}}\in[0.174,0.200]$~s, $K_{\mathrm{sim}}\in[0.95,1.05]$, and
+$b_{\mathrm{sim}}\in[-0.0060,-0.0037]$~m/s. Gaussian noise is also added to the velocity response. Both
+controllers use the fixed nominal values $D=8$,
+$\tau=0.187$~s, $K=1.0$, and $b=-0.00485$~m/s. This setting is termed ideal because it excludes additional
+ball-beam mismatch and external or position-dependent dissipative disturbances. The uncertainty is confined to the
+low-level actuation response.
+
+\textit{2) Reference design and metrics:}
+We cover constant-reference balancing and dynamic tracking, with the latter represented by smooth B-spline and
+transition-rich ramp-dwell trajectories:
+\begin{itemize}
+    \setlength{\itemsep}{0pt}
+    \setlength{\parsep}{0pt}
+    \setlength{\topsep}{2pt}
+    \item \emph{Constant:} The goal and initial ball position are sampled independently from $[0.10,0.60]$~m,
+    with at least $0.05$~m separation.
+    \item \emph{Random B-spline:} A cubic 20-s trajectory uses 12 control points, starts and ends at $0.35$~m,
+    and alternates its inner control points between $[0.10,0.30]$ and $[0.40,0.60]$~m to generate smooth motion.
+    \item \emph{Random Ramp-dwell:} A 20-s reference starts at $0.35$~m and alternates six targets between the
+    same intervals, with 4-5-s half-cycles drawn as either continuous ramps or ramp-and-dwell profiles to test
+    slope changes, turning points, and dwell transitions.
+\end{itemize}
+The dynamic tasks initialize the ball on the reference. We evaluate the constant task using steady-state error
+(SE) and convergence time (CONT). SE is the mean absolute error over the final 1~s, while CONT is the time to
+enter and remain within $0.01$~m of the target, with the episode duration assigned upon nonconvergence. Dynamic
+tracking is evaluated by full-episode mean absolute error (MAE) and root mean square error (RMSE).
+
+\textit{3) Baseline:}
+We implement a nonlinear feedforward-feedback (NFFB) controller as a non-optimization-based baseline. It combines
+reference-acceleration feedforward and ball-state feedback, maps the desired acceleration to a beam angle through
+nominal dynamic inversion, and generates the velocity command through filtering and beam-angle feedback.
+For compactness, we omit time indices and evaluate the following laws using the delay-compensated
+state and time-aligned reference. With $e_p=p_b-p_g$ and $e_v=v_b-v_g$, the outer loop computes
+\begin{equation}
+\begin{aligned}
+    a_b^\star
+    &=a_g-k_p e_p-k_v e_v-k_I z,\\
+    \theta^\star
+    &=\arcsin\!\left(
+    \frac{(p_b+d_b-L)\omega^2-a_b^\star/\gamma}{g}
+    \right),
+\end{aligned}
+    \label{eq:nffb_outer_loop}
+\end{equation}
+where $z$ accumulates $e_p$ with anti-windup, and $a_g$ is the limited reference acceleration
+computed from consecutive preview velocities. Before inversion, $a_b^\star$ is clipped to the
+acceleration range permitted by the beam-angle bounds. A second-order command filter generates
+the desired beam angle $\theta_d$ and angular rate $\omega_d$:
+\begin{equation}
+\begin{aligned}
+    \dot{\theta}_d&=\omega_d,\\
+    \dot{\omega}_d
+    &=\omega_f^2(\theta^\star-\theta_d)
+    -2\zeta_f\omega_f\omega_d.
+\end{aligned}
+    \label{eq:nffb_command_filter}
+\end{equation}
+Here, $\omega_f$ and $\zeta_f$ specify the filter natural frequency and damping ratio.
+Beam-angle feedback and the geometric velocity mapping then give
+\begin{equation}
+\begin{aligned}
+    \omega_c&=\omega_d-k_\theta(\theta-\theta_d),\\
+    c_z^\star&=-\frac{L\cos(\beta-\theta)}{\cos\beta}\,\omega_c,
+\end{aligned}
+    \label{eq:nffb_inner_loop}
+\end{equation}
+where $k_p$, $k_v$, $k_I$, and $k_\theta$ are feedback gains, and $\beta=\beta(\theta)$
+follows \eqref{eq:beam_geometry}. The filtered angle and rate are bounded, and the requested
+increment $c_z^\star-c_z(t_k^-)$ is limited by the command constraints to obtain $u_k$.
+Similar to nominal NMPC, NFFB uses a $D=8$ state predictor based only on the augmented nominal dynamics, including the
+fixed first-order response, without the residual model. NFFB is therefore delay-aware but does not solve an
+online receding-horizon optimization problem. Evaluation uses identical task and response
+distributions, random seed, measured states, and command constraints.
+
+\textit{4) Results:}
+The results are summarized in Table~\ref{tab:ideal_simulation_tracking}. For constant-reference balancing, the nominal NMPC reduces SE and CONT by
+$60.8\%$ and $71.9\%$, respectively. For B-spline references, it reduces MAE and RMSE by $63.7\%$ and $47.7\%$,
+respectively. For ramp-dwell references, the corresponding reductions are $83.5\%$ and $74.9\%$. The strongest
+gains on the transition-rich task highlight the benefit of optimizing with reference preview and the predicted
+actuation response. Overall, nominal NMPC handles balancing and both dynamic tasks in one formulation and
+outperforms NFFB on every reported metric.
+
+\begin{table}[t]
+    \caption{Ideal-simulation tracking performance.}
+    \label{tab:ideal_simulation_tracking}
+    \centering
+    {\footnotesize
+    \setlength{\tabcolsep}{4pt}
+    \renewcommand{\arraystretch}{1.25}
+    \begin{tabular}{|c|c|c|c|}
+        \hline
+        \multirow{2}{*}{\textbf{Reference}} &
+        \multirow{2}{*}{\textbf{Metric}} &
+        \multicolumn{2}{c|}{\textbf{Method}} \\
+        \cline{3-4}
+        & & \textbf{NFFB} & \textbf{Nominal NMPC} \\
+        \hline
+        \multirow{2}{*}{\textbf{Constant}}
+        & \textbf{SE} (cm) & $0.68{\pm}0.44$ & $\mathbf{0.27{\pm}0.16}$ \\
+        \cline{2-4}
+        & \textbf{CONT} (s) & $13.28{\pm}6.60$ & $\mathbf{3.73{\pm}0.79}$ \\
+        \hline
+        \multirow{2}{*}{\textbf{Random B-spline}}
+        & \textbf{MAE} (cm) & $2.16$ & $\mathbf{0.79}$ \\
+        \cline{2-4}
+        & \textbf{RMSE} (cm) & $3.22$ & $\mathbf{1.68}$ \\
+        \hline
+        \multirow{2}{*}{\textbf{Random Ramp-dwell}}
+        & \textbf{MAE} (cm) & $3.87$ & $\mathbf{0.64}$ \\
+        \cline{2-4}
+        & \textbf{RMSE} (cm) & $4.51$ & $\mathbf{1.13}$ \\
+        \hline
+    \end{tabular}}
+\end{table}
+
+
+
+\subsection{Offline Residual-Dynamics Prediction}
+
+\textit{1) Dataset:}
+We use real-world closed-loop data processed as control snapshots at approximately
+60~Hz. The dataset is split by complete trials into 79 for training, 6 for validation, and 6 for held-out testing;
+each split covers constant, sinusoidal, triangular, and trapezoidal references. This trial-level division prevents
+windows from the same trial from appearing in both model fitting and testing. All residual parameters are selected
+using only the training and validation data, with the held-out test trials reserved for final evaluation.
+
+\textit{2) Causal rollout protocol:}
+We emphasize multi-step ball-position and ball-velocity prediction because NMPC optimizes these state trajectories
+over a finite horizon, whereas one-step acceleration error alone does not reveal how model errors accumulate after
+integration. The 6 held-out trials yield 2,028 prediction windows shared by the nominal and structured-residual
+models. Each window initializes both rollouts from the same measured state and pending-command queue, after which
+they use the same recorded command sequence, FOPDT response, geometric parameters, and RK4 integration. Neither
+rollout is reset using future state measurements. Instead, each model is propagated once for 60 steps, with
+$r_a$ in the structured model evaluated from the predicted $p_b$, $v_b$, and $\theta$ at every RK4 stage. We evaluate the
+endpoint position and velocity errors at
+$H\in\{6,12,18,24,30,36,42,48,54,60\}$ steps, corresponding to $0.1$--$1.0$~s at 60~Hz in $0.1$-s intervals.
+In particular, $H=30$ matches the NMPC horizon, while $H=60$ measures error accumulation over one second.
+
+\textit{3) Results:}
+Fig.~\ref{fig:offline_residual_rollout_rmse} shows that the structured-residual model achieves lower position
+and velocity RMSE at every evaluated horizon. At $H=30$, it reduces position and velocity RMSE by $9.3\%$ and
+$12.0\%$, respectively. At $H=60$, the reductions increase to $19.7\%$ and $20.8\%$. The growing margin over
+longer rollouts indicates that the structured residual slows the accumulation of state-prediction error over
+control-relevant horizons. These held-out causal-rollout results answer RQ2 positively, while the corresponding
+closed-loop control benefit is evaluated in the next subsection.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/offline_residual_rollout_rmse.pdf}
+    \caption{Held-out causal rollout prediction over 2,028 common windows. Both models use the same measured
+    initial state, pending-command queue, and subsequent recorded commands. The left and right panels show
+    ball-position and ball-velocity RMSE, respectively; the horizon is expressed in 60-Hz control steps.}
+    \label{fig:offline_residual_rollout_rmse}
+\end{figure}
+
+
+
+\subsection{Real-World Closed-Loop Evaluation}
+
+\textit{1) Experimental setup:}
+We evaluate the nominal and residual-aware NMPC controllers on the physical platform shown in
+Fig.~\ref{fig:real_world_system}. The drone is equipped with an NVIDIA Jetson Orin NX onboard computer and a
+Pixhawk 6C Mini flight controller running PX4~\cite{2015_px4} for low-level velocity control.
+A rope connects the drone to one end of the beam, while the opposite end
+is supported at a stationary pivot. Vertical drone motion changes the beam inclination and guides the freely
+rolling ball, whose position is measured by a laser distance sensor.
+The high-level controllers run at 60~Hz and use the same state,
+objective, constraints, $N=30$, $D=3$, identified FOPDT parameters, and deployment interface. Their only
+prediction-model difference is that residual-aware NMPC enables the structured residual in both
+the state predictor and NMPC. We test three constant targets,
+$p_g^\star\in\{0.15,0.35,0.55\}$~m, and sine, triangle, and trapezoid references with periods of 6 and 8~s.
+The constant targets cover the two off-center regions and the beam center, while the dynamic set varies both
+motion speed and the sharpness of reference transitions. Residual parameters remain fixed throughout the tests.
+Each of the nine conditions is repeated three times for each controller.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.8\columnwidth,height=0.5\columnwidth]{figures/real_world_system.png}
+    \caption{Physical drone-ball platform. The drone carries an NVIDIA Jetson Orin NX and a Pixhawk 6C Mini
+    and is connected to the beam by a rope. A laser distance sensor measures the ball position along the beam.}
+    \label{fig:real_world_system}
+\end{figure}
+
+\textit{2) Evaluation metrics:}
+Each trial lasts 30~s. For constant targets, we retain the SE and CONT definitions used in the ideal-simulation
+evaluation, but use a 5-s terminal window for SE and a $0.03$-m convergence threshold for CONT; a nonconverged
+trial is assigned 30~s. Dynamic tracking is evaluated over
+the complete trial using position MAE, RMSE, and response gain $G=A_b/A_g$, where $A_b$ and $A_g$ are the fitted
+ball-response and reference amplitudes. For an error metric $E$ and for gain, respectively, the reported
+improvements are
+\begin{equation}
+\begin{aligned}
+    \mathcal{I}_E
+    &=100\frac{E_{\mathrm{nom}}-E_{\mathrm{res}}}{E_{\mathrm{nom}}}\%,\\
+    \mathcal{I}_G
+    &=100\frac{|1-G_{\mathrm{nom}}|-|1-G_{\mathrm{res}}|}
+    {|1-G_{\mathrm{nom}}|}\%.
+\end{aligned}
+\label{eq:real_world_improvement}
+\end{equation}
+Each entry is the mean of three trials; positive improvement denotes better residual-aware performance.
+
+\textit{3) Tracking results:}
+Fig.~\ref{fig:real_world_closed_loop_tracking} gives representative traces, while
+Tables~\ref{tab:real_world_constant_tracking} and~\ref{tab:real_world_dynamic_tracking} aggregate all trials.
+In both tables, Nom. and Res. denote nominal and residual-aware NMPC, respectively.
+For constant targets, residual-aware NMPC reduces overall SE by $55.2\%$ and CONT by $46.7\%$. The largest SE reduction, $77.6\%$, occurs at $0.55$~m, whereas
+the $0.35$-m SE changes by only $-0.8\%$. Thus, the structured residual mainly corrects the larger off-center
+bias without noticeably changing the already accurate center-target result. Across the six dynamic conditions,
+the overall MAE and RMSE decrease by $31.1\%$ and $16.5\%$. The response gain increases from $0.855$ to $0.950$,
+which reduces the amplitude deviation from unity by $65.2\%$. Every dynamic condition improves in MAE and gain
+deviation, and five of six improve in RMSE. The exception is the 6-s trapezoid, whose RMSE increases by $3.3\%$;
+the traces and error metrics suggest that local errors around its sharp transitions remain challenging.
+The representative traces show the same main pattern: the center-directed offsets at the two outer constant
+targets are reduced, and the dynamic peaks and valleys follow the requested amplitude more closely.
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/real_world_closed_loop_tracking.pdf}
+    \caption{Representative real-world tracking trials. Constant-reference trials are selected by the median SE
+    and dynamic trials by the median MAE for each controller and condition. The dynamic panels use an 8-s
+    period.}
+    \label{fig:real_world_closed_loop_tracking}
+\end{figure*}
+
+\begin{table}[t]
+    \caption{Real-world constant-target results.}
+    \label{tab:real_world_constant_tracking}
+    \centering
+    {\renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{|c|ccc|ccc|}
+        \hline
+        \multirow{2}{*}{\textbf{Target}} &
+        \multicolumn{3}{c|}{\textbf{SE} (cm)} &
+        \multicolumn{3}{c|}{\textbf{CONT} (s)} \\
+        \cline{2-7}
+        & \textbf{Nom.} & \textbf{Res.} & \textbf{Imp.} (\%)
+        & \textbf{Nom.} & \textbf{Res.} & \textbf{Imp.} (\%) \\
+        \hline
+        $\mathbf{0.15}$~\textbf{m} & 3.035 & \textbf{2.404} & \textbf{$+20.8$}
+        & 21.108 & \textbf{12.810} & \textbf{$+39.3$} \\
+        $\mathbf{0.35}$~\textbf{m} & \textbf{0.915} & 0.921 & $-0.8$
+        & 7.510 & \textbf{6.712} & \textbf{$+10.6$} \\
+        $\mathbf{0.55}$~\textbf{m} & 6.954 & \textbf{1.555} & \textbf{$+77.6$}
+        & 30.000 & \textbf{11.700} & \textbf{$+61.0$} \\
+        \hline
+        \textbf{Overall} & 3.634 & \textbf{1.627} & \textbf{$+55.2$}
+        & 19.539 & \textbf{10.407} & \textbf{$+46.7$} \\
+        \hline
+    \end{tabular}}
+\end{table}
+
+\begin{table*}[t]
+    \caption{Real-world dynamic-tracking results.}
+    \label{tab:real_world_dynamic_tracking}
+    \centering
+    {\renewcommand{\arraystretch}{1.2}
+    \begin{tabular}{|c|ccc|ccc|ccc|}
+        \hline
+        \multirow{2}{*}{\textbf{Reference}} &
+        \multicolumn{3}{c|}{\textbf{MAE} (cm)} &
+        \multicolumn{3}{c|}{\textbf{RMSE} (cm)} &
+        \multicolumn{3}{c|}{\textbf{Response gain}} \\
+        \cline{2-10}
+        & \textbf{Nom.} & \textbf{Res.} & \textbf{Imp.} (\%)
+        & \textbf{Nom.} & \textbf{Res.} & \textbf{Imp.} (\%)
+        & \textbf{Nom.} & \textbf{Res.} & \textbf{Error red.} (\%) \\
+        \hline
+        \textbf{Sine. 6~s} & 2.043 & \textbf{1.236} & \textbf{$+39.5$}
+        & 2.893 & \textbf{2.244} & \textbf{$+22.4$}
+        & 0.869 & \textbf{0.969} & \textbf{$+76.2$} \\
+        \textbf{Sine. 8~s} & 2.293 & \textbf{1.402} & \textbf{$+38.8$}
+        & 2.802 & \textbf{2.287} & \textbf{$+18.4$}
+        & 0.850 & \textbf{0.955} & \textbf{$+70.3$} \\
+        \textbf{Triangle. 6~s} & 2.198 & \textbf{1.648} & \textbf{$+25.0$}
+        & 2.806 & \textbf{2.658} & \textbf{$+5.3$}
+        & 0.849 & \textbf{0.925} & \textbf{$+50.5$} \\
+        \textbf{Triangle. 8~s} & 2.087 & \textbf{1.365} & \textbf{$+34.6$}
+        & 2.530 & \textbf{1.941} & \textbf{$+23.3$}
+        & 0.841 & \textbf{0.938} & \textbf{$+60.8$} \\
+        \textbf{Trapezoid. 6~s} & 2.552 & \textbf{2.350} & \textbf{$+7.9$}
+        & \textbf{3.635} & 3.756 & $-3.3$
+        & 0.874 & \textbf{0.947} & \textbf{$+58.0$} \\
+        \textbf{Trapezoid. 8~s} & 2.715 & \textbf{1.563} & \textbf{$+42.4$}
+        & 3.486 & \textbf{2.276} & \textbf{$+34.7$}
+        & 0.851 & \textbf{0.965} & \textbf{$+76.3$} \\
+        \hline
+        \textbf{Overall} & 2.315 & \textbf{1.594} & \textbf{$+31.1$}
+        & 3.025 & \textbf{2.527} & \textbf{$+16.5$}
+        & 0.855 & \textbf{0.950} & \textbf{$+65.2$} \\
+        \hline
+    \end{tabular}}
+\end{table*}
+
+\textit{4) Real-time feasibility:}
+Across the 27 trials for each controller, the mean/99th-percentile/maximum total computation times are
+$1.583/2.704/3.452$~ms for nominal NMPC and $1.746/2.972/3.731$~ms for residual-aware NMPC. Both are well below
+the $16.67$-ms control period. All 48,616 residual-aware updates return zero solver status, with no fallback,
+soft deadline miss, or hard deadline miss; the nominal controller likewise records none. Therefore, under the
+tested platform, references, and independent repeats, residual-aware NMPC improves overall balancing and dynamic
+tracking accuracy, reduces amplitude attenuation, and retains 60-Hz feasibility. The isolated 6-s trapezoid RMSE
+increase also shows that this conclusion does not imply an improvement in every individual metric.
+
+
+
+%=============================================================================
+\section{CONCLUSIONS}
+\label{sec:conclusions}
+This paper developed a unified residual-aware predictive-control framework for indirect drone--ball
+manipulation. Target-position balancing is treated as constant-reference tracking, so one NMPC formulation
+handles static targets and time-varying trajectories. Its augmented nominal model combines ball--beam mechanics
+with an identified FOPDT low-level actuation response, while a pending-command predictor compensates for pure
+delay. Remaining mismatch is represented by a bounded and smooth ball-acceleration residual with a
+position-dependent beam-profile correction and a friction-inspired dissipative term. The same frozen residual is
+used in the predictor and NMPC without changing the identified command channel.
+
+The experiments provide three levels of evidence. In ideal simulation, nominal NMPC achieved lower error than
+NFFB on all reported balancing and tracking metrics. On held-out physical data, the structured residual reduced
+one-second position and velocity rollout RMSE by $19.7\%$ and $20.8\%$. In physical closed-loop experiments,
+residual-aware NMPC reduced overall constant-target SE by $55.2\%$ and dynamic MAE by $31.1\%$, while raising
+response gain from $0.855$ to $0.950$. It was deployed at 60~Hz. Under residual-aware NMPC, the 6-s trapezoid
+RMSE increased by $3.3\%$, so the observed benefit does not extend to every individual metric. Taken together,
+these results support
+structured, control-oriented residual dynamics for improving multi-step prediction and unified closed-loop
+tracking on this platform.
+
+The study remains limited to the vertically constrained Aerial-Balance-Bench system, the tested reference set,
+and a residual learned offline from a fixed dataset. The learned components are structured approximations rather
+than direct measurements of the beam profile or friction. Future work will study safe online updates, wider
+operating conditions, and indirect aerial manipulation with less constrained vehicle and support motion.
+
+
+
+
+
+
+
+\bibliographystyle{ieeetr}
+\bibliography{references}
+
+\end{document}

@@ -358,7 +358,8 @@ solver 选项显式固定为：
 - predictor 激活时，先把 'pg_0...pg_D' 传给 predictor，得到执行 pending command 后的等效无延时状态；OCP 消费原始 preview 的 'D...D+N'。
 - 必须满足 raw preview $H\geq D+N$。默认无延时为 $D=0,H=N=30$；D=8 配置为 $D=8,H=38,N=30$。
 - policy 依据 'raw_observation_fields' 查找 'pg_i/vg_i'，不依赖扩展 observation 的硬编码列号。原有 11-D prefix 不变。
-- predictor 激活时，其 $(\tau,K,b)$、'step_dt'、'max_acc'、'max_velocity' 必须与 NMPC/环境一致。'velocity_response_max_abs_velocity' 必须为 0，速度限制统一由 OCP 硬约束表达。
+- predictor 激活时，'step_dt'、'max_acc'、'max_velocity' 必须与 NMPC/环境一致。若 'state_predictor.velocity_response_enabled=true'，predictor 的 $(\tau,K,b)$ 还必须与 NMPC response 一致，且 'velocity_response_max_abs_velocity' 必须为 0，速度限制统一由 OCP 硬约束表达。
+- 允许激活 predictor 的同时设置 'state_predictor.velocity_response_enabled=false'。此时 predictor 在外部延迟区间内把 pending command 作为瞬时速度传播，不使用 predictor 自身的 $(\tau,K,b)$；OCP 仍独立使用 'response.*' 建模未来速度响应。该开关不会改变 acados formulation 或传入的 response 参数，但会改变 predictor 给出的 OCP 初始状态，因此不保证控制 action 数值不变。
 
 每次动作（包括 fallback 零动作）之后都调用 'state_predictor.update_after_action()'，使 policy 命令 buffer、predictor queue 和环境收到的增量一致。partial reset 同时清空对应环境的命令、queue 和 solver iterate，不影响其他环境。
 

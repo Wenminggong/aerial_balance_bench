@@ -1,0 +1,48 @@
+{
+  "passed": true,
+  "models": [
+    "nominal",
+    "profile_only",
+    "friction_only",
+    "rbf_pv",
+    "mlp",
+    "structured"
+  ],
+  "test_windows_per_model": 2028,
+  "window_error_rows": 121680,
+  "aggregates_recomputed": 660,
+  "common_training_and_validation_windows": true,
+  "stored_predictions_match_errors": true,
+  "nonfinite_predictions": 0,
+  "contract_tests_passed": true,
+  "structured_state_dict_bitwise_equal": false,
+  "structured_history_bitwise_equal": false,
+  "structured_numerically_reproduced": true,
+  "reproduction_absolute_tolerance": 1e-12,
+  "structured_history_max_absolute_difference": 2.220446049250313e-16,
+  "structured_parameter_max_differences": {
+    "delta_coefficients": 1.0408340855860843e-17,
+    "coulomb_coefficients": 1.3877787807814457e-17,
+    "viscous_coefficients": 1.3877787807814457e-17,
+    "blackbox_coefficients": 0.0,
+    "kappa_coefficients": 0.0,
+    "centers": 0.0,
+    "blackbox_centers": 0.0
+  },
+  "old_structured_checkpoint_sha256": "e12529b0b5e62e1b6984392ee55a042defbc20aa3fdb6e4c9e8be5a94eca9530",
+  "new_structured_checkpoint_sha256": "e0caec07ee0d1398b07dc6b09764e5cf412e34e3ddc43b75e42f215ac31ba1f8",
+  "checkpoint_container_note": "Different checkpoint containers; tensors and history agree within floating-point precision, not bitwise.",
+  "migration_parity": {
+    "forward_bitwise_equal": true,
+    "sampling_bitwise_equal": true,
+    "batch_bitwise_equal": true,
+    "loss_and_gradients_bitwise_equal": true,
+    "losses": {
+      "0.0": 0.3224825179247165,
+      "0.5": 1.4809580314701876
+    },
+    "train_windows": 136964,
+    "old_best_validation_score": 0.9236790266308037
+  },
+  "test_metadata_sha256": "8f1ebadc2ac0ade47bb22d17eaa8a267acf7f4521cc5a2e9ae331926f85a8aea"
+}

@@ -1,0 +1,11 @@
+test_bounded_smooth_and_checkpoint (test_contracts.Contracts) ... ok
+test_copies_and_splits (test_contracts.Contracts) ... ok
+test_runtime_import_independence (test_contracts.Contracts) ... ok
+test_train_only_normalization (test_contracts.Contracts) ... ok
+test_windows_and_zero_rollout (test_contracts.Contracts) ... ok
+test_epoch_and_stage_boundary_resume (test_resume.Resume) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 3.375s
+
+OK

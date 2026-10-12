@@ -1,0 +1,13 @@
+split,category,metric,value
+validation,point,nominal_rmse,0.13512069183578881
+validation,point,rbf_rmse,0.13066260558832002
+validation,rollout,h33_pb_rmse,0.02515576492419623
+validation,rollout,h33_vb_rmse,0.06908536190958865
+test,point,nominal_rmse,0.21353442190867433
+test,point,rbf_rmse,0.20556246931390343
+test,rollout,h33_pb_rmse,0.025430682612506375
+test,rollout,h33_vb_rmse,0.07286285019460916
+stress,point,nominal_rmse,0.425269198777805
+stress,point,rbf_rmse,0.4201977622400208
+stress,rollout,h33_pb_rmse,0.05329995823729868
+stress,rollout,h33_vb_rmse,0.15027699147979312

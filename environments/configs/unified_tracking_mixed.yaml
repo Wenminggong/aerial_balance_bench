@@ -9,6 +9,7 @@ env:
 
 unified_tracking_task:
   trajectory_types: [constant, random_b_spline, random_ramp_dwell]
+  # trajectory_types: [sine, triangle, trapezoid]
   trajectory_type_weights: [1.0, 1.0, 1.0]
   constant_goal_range: [0.10, 0.60]
   dynamic_center_range: [0.3, 0.4]
@@ -48,7 +49,7 @@ unified_tracking_task:
 
 reference_preview:
   enabled: true
-  future_steps: 38
+  future_steps: 46
 
 velocity_interface:
   max_acc: 5.0
@@ -62,8 +63,8 @@ robustness:
   controller_gain_variation_enabled: false
   controller_gain_range: [10.0, 10.0]
   action_delay_enabled: true
-  delay_step: 8
-  delay_step_choices: [6, 7, 8, 9, 10]
+  delay_step: 4
+  # delay_step_choices: [6, 7, 8, 9, 10]
   velocity_response_enabled: true
   # # oracle vel response
   # velocity_response_tau_s_range: [0.155, 0.155]
@@ -76,9 +77,12 @@ robustness:
   # velocity_response_noise_clip: 0.1
   # velocity_response_max_abs_velocity: 0.0
   # standard vel response
-  velocity_response_tau_s_range: [0.150, 0.160]
-  velocity_response_gain_range: [0.84, 0.88]
-  velocity_response_bias_range: [-0.004, -0.003]
+  # velocity_response_tau_s_range: [0.150, 0.160]
+  # velocity_response_gain_range: [0.84, 0.88]
+  # velocity_response_bias_range: [-0.004, -0.003]
+  velocity_response_tau_s_range: [0.200, 0.210]
+  velocity_response_gain_range: [1.0, 1.05]
+  velocity_response_bias_range: [-0.0025, -0.002]
   velocity_response_noise_mode: gaussian
   velocity_response_noise_std_range: [0.01, 0.03]
   velocity_response_ou_theta_range: [4.0, 10.0]

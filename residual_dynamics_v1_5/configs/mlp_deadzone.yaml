@@ -1,0 +1,108 @@
+schema_version: 1
+
+paths:
+  fit_source_dir: logs/real_world/acados_nmpc_cpp/real_world_acados_unified_20260815
+  test_source_dir: logs/real_world/acados_nmpc_cpp/real_world_acados_unified_20260817
+  processed_dir: residual_dynamics_v1_5/data/processed
+  training_runs_dir: residual_dynamics_v1_5/runs/training
+  wandb_dir: residual_dynamics_v1_5/runs/wandb
+  results_dir: residual_dynamics_v1_5/results
+  report_path: residual_dynamics_v1_5/REPORT.md
+  v1_weights_path: residual_dynamics/runs/training/mlp5_seed7_8777501a_20260816_171018/weights.npz
+
+data:
+  standard_groups: [constant_015, constant_035, constant_055, sine_period_6, sine_period_8, triangle_period_6, triangle_period_8, trapezoid_period_6, trapezoid_period_8]
+  extra_training_groups: [constant_035_2]
+  time_field: t_trial
+  phase_field: phase
+  phase_value: tracking
+  ball_field: obs_pb
+  theta_field: obs_theta
+  drone_velocity_field: obs_vrz
+  gap_factor: 2.5
+  ball_window: 31
+  ball_polyorder: 3
+  theta_window: 11
+  theta_polyorder: 3
+  drone_velocity_window: 7
+  drone_velocity_polyorder: 2
+  edge_trim: 15
+  min_segment_samples: 92
+  jump_threshold_m: 0.025
+  jump_dilation_samples: 18
+  direction_radius_samples: 3
+  static_persistence_samples: 7
+  dynamic_speed_mps: 0.03
+  static_speed_mps: 0.01
+  static_acceleration_mps2: 0.03
+  max_abs_velocity_mps: 0.5
+  max_abs_acceleration_mps2: 1.0
+  max_abs_residual_mps2: 1.0
+  rollout_steps: [6, 12, 30]
+  evaluation_steps: [6, 12, 30, 60]
+  validation_stride: 5
+
+model:
+  input_names: [pb, vb, theta, omega, a_nom]
+  hidden_dims: [16, 16]
+  output_limit_mps2: 0.20
+  dtype: float64
+  deadzone_min_mps2: 0.005
+  deadzone_max_mps2: 0.15
+  deadzone_initial_mps2: 0.05
+  deadzone_smoothing_mps2: 0.005
+  velocity_switch_mps: 0.03
+
+loss:
+  position_scale_m: 0.01
+  velocity_scale_mps: 0.05
+  horizon_weights: [0.2, 0.3, 0.5]
+  point_weight: 0.25
+  huber_beta_mps2: 0.02
+  jacobian_weight: 0.0001
+  zero_velocity_anchor_weight: 0.1
+  static_weight: 0.5
+  stick_bound_weight: 0.1
+
+training:
+  seed: 7
+  batch_size: 128
+  steps_per_epoch: 32
+  dynamic_max_epochs: 500
+  dynamic_learning_rate: 0.001
+  dynamic_weight_decay: 0.00001
+  dynamic_lr_patience: 10
+  dynamic_lr_factor: 0.5
+  dynamic_early_stopping_patience: 40
+  deadzone_max_epochs: 200
+  deadzone_learning_rate: 0.005
+  deadzone_early_stopping_patience: 30
+  gradient_clip_norm: 1.0
+  validation_max_windows: 2048
+
+runtime:
+  device: auto
+  gpu_min_speedup: 1.20
+  benchmark_warmup_steps: 20
+  benchmark_steps: 100
+
+wandb:
+  enabled: true
+  mode: auto
+  project: aerial-balance-residual-dynamics
+  entity: null
+  group: real_world_20260815_mlp_deadzone_v1_5
+  tags: [real_world, acceleration_residual, dynamic_mlp, smooth_deadzone, v1_5]
+  log_batch_interval: 20
+  log_histogram_interval_epochs: 10
+  init_timeout_s: 30
+
+acceptance:
+  dynamic_v1_degradation_max: 0.10
+  rollout_improvement_min: 0.25
+  per_dynamic_degradation_max: 0.10
+  static_median_max_mps2: 0.01
+  static_p95_max_mps2: 0.02
+  static_false_motion_rate_max: 0.05
+  saturation_rate_max: 0.01
+  deadzone_boundary_margin_fraction: 0.01

@@ -1,5 +1,5 @@
 env_config: environments/configs/unified_tracking_constant_response_d8.yaml
-policy_config: baselines/configs/nffb_sine_phase0_acc5.yaml
+policy_config: baselines/configs/nffb_optimal.yaml
 
 # D=8 plant/reference prediction plus exact nominal response inversion. The
 # fixed environment ranges make every response parameter safely resolvable.
@@ -12,9 +12,9 @@ policy_overrides:
     max_acc: auto
     max_velocity: auto
     velocity_response_enabled: true
-    velocity_response_tau_s: 0.155
-    velocity_response_gain: 0.86
-    velocity_response_bias: -0.0035
+    velocity_response_tau_s: 0.187
+    velocity_response_gain: 1.0
+    velocity_response_bias: -0.00485
     velocity_response_max_abs_velocity: auto
     plank_length: auto
     rope_length: auto
@@ -27,6 +27,10 @@ policy_overrides:
   velocity_response_compensation:
     enabled: true
     parameter_source: state_predictor
+    tau_s: 0.187
+    gain: 1.0
+    bias: -0.00485
+    max_abs_velocity: 0.0
 
 runner:
   target_episodes: 10
@@ -35,5 +39,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/nffb/unified_tracking
+  root_dir: logs/nffb/unified_tracking_icra/response_compensation
   run_name: nffb_unified_predictor_response_compensation_d8

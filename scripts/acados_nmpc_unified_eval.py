@@ -326,7 +326,7 @@ def _resolve_policy_cfg_from_env(
         predictor.ball_inertia_ratio = float(cfg.model.ball_inertia_ratio)
     if _is_auto(predictor.epsilon):
         predictor.epsilon = float(cfg.model.epsilon)
-    if predictor.enabled:
+    if predictor.enabled and predictor.velocity_response_enabled:
         predictor.resolve_velocity_response_from_robustness(env_cfg.robustness)
     else:
         for predictor_name, response_name in (

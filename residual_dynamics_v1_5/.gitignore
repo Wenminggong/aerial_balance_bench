@@ -1,0 +1,10 @@
+data/processed/*
+!data/processed/.gitkeep
+runs/training/*
+!runs/training/.gitkeep
+runs/wandb/*
+!runs/wandb/.gitkeep
+__pycache__/
+tests/__pycache__/
+results/validation_summary.json
+results/test_summary.json

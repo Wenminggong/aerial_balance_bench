@@ -14,3 +14,6 @@ build/
 c_generated_code/
 *.py[cod]
 *$py.class
+
+# data
+*/data/

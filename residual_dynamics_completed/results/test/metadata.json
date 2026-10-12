@@ -1,0 +1,1344 @@
+{
+  "split": "test",
+  "windows": 2028,
+  "window_hash": "839102797ff97b2a33890294120456b5332290b59737f16b8a8cad4eda9b1d1e",
+  "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+  "config_hash": "a6e5ff1781f2fa84bb9860fa3cb4daa8265f8d954e4c719c2d39158cb0077ea1",
+  "protocol": {
+    "seed": 7,
+    "threads": 1,
+    "dtype": "float64",
+    "device": "cpu",
+    "batch_size": 256,
+    "patience": 20,
+    "min_improvement": 1e-06,
+    "gradient_clip": 1,
+    "legacy": {
+      "data": {
+        "position_bin_edges_m": [
+          0,
+          0.1,
+          0.2,
+          0.3,
+          0.4,
+          0.5,
+          0.6,
+          0.7
+        ]
+      }
+    },
+    "sampling": {
+      "empirical_fraction": 0.4,
+      "joint_fraction": 0.4,
+      "actuation_fraction": 0.2,
+      "velocity_bin_edges_mps": [
+        -1e+100,
+        -0.3,
+        -0.15,
+        -0.06,
+        -0.02,
+        0.02,
+        0.06,
+        0.15,
+        0.3,
+        1e+100
+      ],
+      "actuation_threshold_mps2": 0.1
+    },
+    "identification_loss": {
+      "horizons": [
+        3,
+        6,
+        12
+      ],
+      "horizon_weights": [
+        0.5,
+        0.3,
+        0.2
+      ],
+      "point_weight": 0.25,
+      "huber_beta": 0.02
+    },
+    "rollout_loss": {
+      "horizons": [
+        6,
+        12,
+        30,
+        33
+      ],
+      "horizon_weights": [
+        0.35,
+        0.3,
+        0.2,
+        0.15
+      ],
+      "position_scale": 0.01,
+      "velocity_scale": 0.05,
+      "causal_auxiliary_weight": 0.25,
+      "huber_beta": 1
+    },
+    "stages": [
+      {
+        "name": "stage1",
+        "epochs": 80,
+        "steps": 16,
+        "lr": 0.003,
+        "rollout_weight": 0
+      },
+      {
+        "name": "stage2",
+        "epochs": 50,
+        "steps": 8,
+        "lr": 0.0003,
+        "rollout_weight": 0.5
+      }
+    ],
+    "validation": {
+      "max_windows": 512,
+      "stride": 5,
+      "score_weights": [
+        0.15,
+        0.2,
+        0.325,
+        0.325
+      ],
+      "horizon": 33
+    },
+    "test": {
+      "max_windows": 2048,
+      "stride": 5,
+      "horizons": [
+        6,
+        12,
+        18,
+        24,
+        30,
+        36,
+        42,
+        48,
+        54,
+        60
+      ]
+    },
+    "models": {
+      "output_limit": 0.25,
+      "profile": {
+        "centers": 13,
+        "width": 0.065,
+        "delta_limit": 0.035
+      },
+      "friction": {
+        "vtransition": 0.025,
+        "coulomb_limit": 0.15,
+        "viscous_limit": 0.5
+      },
+      "rbf_pv": {
+        "p_centers": [
+          0,
+          0.0875,
+          0.175,
+          0.2625,
+          0.35,
+          0.4375,
+          0.525,
+          0.6125,
+          0.7
+        ],
+        "v_centers": [
+          -0.5,
+          -0.3,
+          -0.15,
+          -0.06,
+          0,
+          0.06,
+          0.15,
+          0.3,
+          0.5
+        ],
+        "widths": [
+          0.1,
+          0.1
+        ],
+        "ood_gate": false,
+        "coefficient_clamp": false
+      },
+      "mlp": {
+        "hidden": [
+          16,
+          16
+        ],
+        "activation": "tanh",
+        "l2": 1e-05
+      },
+      "difference_regularization": [
+        0.002,
+        0.01
+      ]
+    }
+  },
+  "models": {
+    "nominal": {
+      "model": "nominal",
+      "trained": false
+    },
+    "profile_only": {
+      "model": "profile_only",
+      "run": "runs/profile_only_seed7_7cb86219b8f4",
+      "best_validation_score": 0.9288649136217864,
+      "best_epoch": [
+        "stage2",
+        37
+      ],
+      "elapsed_s": 42.25867310306057,
+      "epochs": {
+        "stage1": 52,
+        "stage2": 50
+      },
+      "checkpoint_sha256": "1455df1aa602d55b8eb70b57fae598e267981fd5c21c4c03e6e7409b1e908705",
+      "metadata": {
+        "config_hash": "a6e5ff1781f2fa84bb9860fa3cb4daa8265f8d954e4c719c2d39158cb0077ea1",
+        "sources": {
+          "__init__.py": "0d80f15849629f8bc28d7b3ba94952f459241f8fe5b03e56858960e5a75c45d7",
+          "config.py": "12508b4c2a16d18e0f4178a3c5473666ed95b44fa4a6b176b4c3690d21148ea6",
+          "data.py": "ea7b98557f329c0775060141f395fd165176a78e32a4da925e9158020470b58c",
+          "dynamics.py": "49a7862582c3a5d4a446570f51c86597a74a4081baf002650c09efab140f1556",
+          "losses.py": "64751ec38a2572aed6968959cc0fccf220f9cb66ada66026d94fb4e74db07b1b",
+          "models/__init__.py": "7bdea0ae07bf644c6d97552c12b0eeceba8944bb4a2c68296327a31e3ec15818",
+          "models/mlp.py": "2eda45c6e4fb89b0b715d27eef48c7572553af817a0adb1b6e946aa1e8dfa1f7",
+          "models/structured.py": "3cbf6681532895c5c4db26bf33a23aa7222b60cfc9562ce4f4fddf67c02ebffc",
+          "train.py": "36506c5209b950c5a2ab264e832e1df0f5e3aa7e8fa26d186159cc2b554b6e3e"
+        },
+        "manifest_sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+        "model": "profile_only",
+        "run_hash": "7cb86219b8f46a3caf7b62aff5d5bed685472f24d509f2cbcb60b8aac299eacb",
+        "configuration": {
+          "seed": 7,
+          "threads": 1,
+          "dtype": "float64",
+          "device": "cpu",
+          "batch_size": 256,
+          "patience": 20,
+          "min_improvement": 1e-06,
+          "gradient_clip": 1,
+          "legacy": {
+            "data": {
+              "position_bin_edges_m": [
+                0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7
+              ]
+            }
+          },
+          "sampling": {
+            "empirical_fraction": 0.4,
+            "joint_fraction": 0.4,
+            "actuation_fraction": 0.2,
+            "velocity_bin_edges_mps": [
+              -1e+100,
+              -0.3,
+              -0.15,
+              -0.06,
+              -0.02,
+              0.02,
+              0.06,
+              0.15,
+              0.3,
+              1e+100
+            ],
+            "actuation_threshold_mps2": 0.1
+          },
+          "identification_loss": {
+            "horizons": [
+              3,
+              6,
+              12
+            ],
+            "horizon_weights": [
+              0.5,
+              0.3,
+              0.2
+            ],
+            "point_weight": 0.25,
+            "huber_beta": 0.02
+          },
+          "rollout_loss": {
+            "horizons": [
+              6,
+              12,
+              30,
+              33
+            ],
+            "horizon_weights": [
+              0.35,
+              0.3,
+              0.2,
+              0.15
+            ],
+            "position_scale": 0.01,
+            "velocity_scale": 0.05,
+            "causal_auxiliary_weight": 0.25,
+            "huber_beta": 1
+          },
+          "stages": [
+            {
+              "name": "stage1",
+              "epochs": 80,
+              "steps": 16,
+              "lr": 0.003,
+              "rollout_weight": 0
+            },
+            {
+              "name": "stage2",
+              "epochs": 50,
+              "steps": 8,
+              "lr": 0.0003,
+              "rollout_weight": 0.5
+            }
+          ],
+          "validation": {
+            "max_windows": 512,
+            "stride": 5,
+            "score_weights": [
+              0.15,
+              0.2,
+              0.325,
+              0.325
+            ],
+            "horizon": 33
+          },
+          "test": {
+            "max_windows": 2048,
+            "stride": 5,
+            "horizons": [
+              6,
+              12,
+              18,
+              24,
+              30,
+              36,
+              42,
+              48,
+              54,
+              60
+            ]
+          },
+          "models": {
+            "output_limit": 0.25,
+            "profile": {
+              "centers": 13,
+              "width": 0.065,
+              "delta_limit": 0.035
+            },
+            "friction": {
+              "vtransition": 0.025,
+              "coulomb_limit": 0.15,
+              "viscous_limit": 0.5
+            },
+            "rbf_pv": {
+              "p_centers": [
+                0,
+                0.0875,
+                0.175,
+                0.2625,
+                0.35,
+                0.4375,
+                0.525,
+                0.6125,
+                0.7
+              ],
+              "v_centers": [
+                -0.5,
+                -0.3,
+                -0.15,
+                -0.06,
+                0,
+                0.06,
+                0.15,
+                0.3,
+                0.5
+              ],
+              "widths": [
+                0.1,
+                0.1
+              ],
+              "ood_gate": false,
+              "coefficient_clamp": false
+            },
+            "mlp": {
+              "hidden": [
+                16,
+                16
+              ],
+              "activation": "tanh",
+              "l2": 1e-05
+            },
+            "difference_regularization": [
+              0.002,
+              0.01
+            ]
+          }
+        },
+        "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+        "train_window_hash": "217ac94e4b40937454dea8cfe322e4b7ecd7c409fef86c99228c7b645f078ca3",
+        "validation_window_hash": "c3635c3b17298c109b1d1e82c25ef7a267c42ec6bd42196ccc5ac8f7e8b10830",
+        "train_windows": 136964,
+        "validation_windows": 512,
+        "python": "3.10.15",
+        "torch": "2.8.0+cu129",
+        "numpy": "1.26.4",
+        "device": "cpu",
+        "threads": 1,
+        "dtype": "float64",
+        "git_commit": "8dd46cb71c7a4d48d492a9728f9674b4f03cb467"
+      }
+    },
+    "friction_only": {
+      "model": "friction_only",
+      "run": "runs/friction_only_seed7_7cb86219b8f4",
+      "best_validation_score": 0.9754046240157126,
+      "best_epoch": [
+        "stage2",
+        50
+      ],
+      "elapsed_s": 41.58451836230233,
+      "epochs": {
+        "stage1": 41,
+        "stage2": 50
+      },
+      "checkpoint_sha256": "7aaa7f51d39e9a7dbf4207c38b64f2dda2e76544c022a4c3aef2e5e9bf682f2f",
+      "metadata": {
+        "config_hash": "a6e5ff1781f2fa84bb9860fa3cb4daa8265f8d954e4c719c2d39158cb0077ea1",
+        "sources": {
+          "__init__.py": "0d80f15849629f8bc28d7b3ba94952f459241f8fe5b03e56858960e5a75c45d7",
+          "config.py": "12508b4c2a16d18e0f4178a3c5473666ed95b44fa4a6b176b4c3690d21148ea6",
+          "data.py": "ea7b98557f329c0775060141f395fd165176a78e32a4da925e9158020470b58c",
+          "dynamics.py": "49a7862582c3a5d4a446570f51c86597a74a4081baf002650c09efab140f1556",
+          "losses.py": "64751ec38a2572aed6968959cc0fccf220f9cb66ada66026d94fb4e74db07b1b",
+          "models/__init__.py": "7bdea0ae07bf644c6d97552c12b0eeceba8944bb4a2c68296327a31e3ec15818",
+          "models/mlp.py": "2eda45c6e4fb89b0b715d27eef48c7572553af817a0adb1b6e946aa1e8dfa1f7",
+          "models/structured.py": "3cbf6681532895c5c4db26bf33a23aa7222b60cfc9562ce4f4fddf67c02ebffc",
+          "train.py": "36506c5209b950c5a2ab264e832e1df0f5e3aa7e8fa26d186159cc2b554b6e3e"
+        },
+        "manifest_sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+        "model": "friction_only",
+        "run_hash": "7cb86219b8f46a3caf7b62aff5d5bed685472f24d509f2cbcb60b8aac299eacb",
+        "configuration": {
+          "seed": 7,
+          "threads": 1,
+          "dtype": "float64",
+          "device": "cpu",
+          "batch_size": 256,
+          "patience": 20,
+          "min_improvement": 1e-06,
+          "gradient_clip": 1,
+          "legacy": {
+            "data": {
+              "position_bin_edges_m": [
+                0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7
+              ]
+            }
+          },
+          "sampling": {
+            "empirical_fraction": 0.4,
+            "joint_fraction": 0.4,
+            "actuation_fraction": 0.2,
+            "velocity_bin_edges_mps": [
+              -1e+100,
+              -0.3,
+              -0.15,
+              -0.06,
+              -0.02,
+              0.02,
+              0.06,
+              0.15,
+              0.3,
+              1e+100
+            ],
+            "actuation_threshold_mps2": 0.1
+          },
+          "identification_loss": {
+            "horizons": [
+              3,
+              6,
+              12
+            ],
+            "horizon_weights": [
+              0.5,
+              0.3,
+              0.2
+            ],
+            "point_weight": 0.25,
+            "huber_beta": 0.02
+          },
+          "rollout_loss": {
+            "horizons": [
+              6,
+              12,
+              30,
+              33
+            ],
+            "horizon_weights": [
+              0.35,
+              0.3,
+              0.2,
+              0.15
+            ],
+            "position_scale": 0.01,
+            "velocity_scale": 0.05,
+            "causal_auxiliary_weight": 0.25,
+            "huber_beta": 1
+          },
+          "stages": [
+            {
+              "name": "stage1",
+              "epochs": 80,
+              "steps": 16,
+              "lr": 0.003,
+              "rollout_weight": 0
+            },
+            {
+              "name": "stage2",
+              "epochs": 50,
+              "steps": 8,
+              "lr": 0.0003,
+              "rollout_weight": 0.5
+            }
+          ],
+          "validation": {
+            "max_windows": 512,
+            "stride": 5,
+            "score_weights": [
+              0.15,
+              0.2,
+              0.325,
+              0.325
+            ],
+            "horizon": 33
+          },
+          "test": {
+            "max_windows": 2048,
+            "stride": 5,
+            "horizons": [
+              6,
+              12,
+              18,
+              24,
+              30,
+              36,
+              42,
+              48,
+              54,
+              60
+            ]
+          },
+          "models": {
+            "output_limit": 0.25,
+            "profile": {
+              "centers": 13,
+              "width": 0.065,
+              "delta_limit": 0.035
+            },
+            "friction": {
+              "vtransition": 0.025,
+              "coulomb_limit": 0.15,
+              "viscous_limit": 0.5
+            },
+            "rbf_pv": {
+              "p_centers": [
+                0,
+                0.0875,
+                0.175,
+                0.2625,
+                0.35,
+                0.4375,
+                0.525,
+                0.6125,
+                0.7
+              ],
+              "v_centers": [
+                -0.5,
+                -0.3,
+                -0.15,
+                -0.06,
+                0,
+                0.06,
+                0.15,
+                0.3,
+                0.5
+              ],
+              "widths": [
+                0.1,
+                0.1
+              ],
+              "ood_gate": false,
+              "coefficient_clamp": false
+            },
+            "mlp": {
+              "hidden": [
+                16,
+                16
+              ],
+              "activation": "tanh",
+              "l2": 1e-05
+            },
+            "difference_regularization": [
+              0.002,
+              0.01
+            ]
+          }
+        },
+        "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+        "train_window_hash": "217ac94e4b40937454dea8cfe322e4b7ecd7c409fef86c99228c7b645f078ca3",
+        "validation_window_hash": "c3635c3b17298c109b1d1e82c25ef7a267c42ec6bd42196ccc5ac8f7e8b10830",
+        "train_windows": 136964,
+        "validation_windows": 512,
+        "python": "3.10.15",
+        "torch": "2.8.0+cu129",
+        "numpy": "1.26.4",
+        "device": "cpu",
+        "threads": 1,
+        "dtype": "float64",
+        "git_commit": "8dd46cb71c7a4d48d492a9728f9674b4f03cb467"
+      }
+    },
+    "rbf_pv": {
+      "model": "rbf_pv",
+      "run": "runs/rbf_pv_seed7_7cb86219b8f4",
+      "best_validation_score": 0.9650999438840657,
+      "best_epoch": [
+        "stage2",
+        50
+      ],
+      "elapsed_s": 85.61260416777804,
+      "epochs": {
+        "stage1": 21,
+        "stage2": 50
+      },
+      "checkpoint_sha256": "9a0af0fa23418e5b9bdc10b1f3a9b63b656b51f28c70042eff599db4f006d422",
+      "metadata": {
+        "config_hash": "a6e5ff1781f2fa84bb9860fa3cb4daa8265f8d954e4c719c2d39158cb0077ea1",
+        "sources": {
+          "__init__.py": "0d80f15849629f8bc28d7b3ba94952f459241f8fe5b03e56858960e5a75c45d7",
+          "config.py": "12508b4c2a16d18e0f4178a3c5473666ed95b44fa4a6b176b4c3690d21148ea6",
+          "data.py": "ea7b98557f329c0775060141f395fd165176a78e32a4da925e9158020470b58c",
+          "dynamics.py": "49a7862582c3a5d4a446570f51c86597a74a4081baf002650c09efab140f1556",
+          "losses.py": "64751ec38a2572aed6968959cc0fccf220f9cb66ada66026d94fb4e74db07b1b",
+          "models/__init__.py": "7bdea0ae07bf644c6d97552c12b0eeceba8944bb4a2c68296327a31e3ec15818",
+          "models/mlp.py": "2eda45c6e4fb89b0b715d27eef48c7572553af817a0adb1b6e946aa1e8dfa1f7",
+          "models/structured.py": "3cbf6681532895c5c4db26bf33a23aa7222b60cfc9562ce4f4fddf67c02ebffc",
+          "train.py": "36506c5209b950c5a2ab264e832e1df0f5e3aa7e8fa26d186159cc2b554b6e3e"
+        },
+        "manifest_sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+        "model": "rbf_pv",
+        "run_hash": "7cb86219b8f46a3caf7b62aff5d5bed685472f24d509f2cbcb60b8aac299eacb",
+        "configuration": {
+          "seed": 7,
+          "threads": 1,
+          "dtype": "float64",
+          "device": "cpu",
+          "batch_size": 256,
+          "patience": 20,
+          "min_improvement": 1e-06,
+          "gradient_clip": 1,
+          "legacy": {
+            "data": {
+              "position_bin_edges_m": [
+                0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7
+              ]
+            }
+          },
+          "sampling": {
+            "empirical_fraction": 0.4,
+            "joint_fraction": 0.4,
+            "actuation_fraction": 0.2,
+            "velocity_bin_edges_mps": [
+              -1e+100,
+              -0.3,
+              -0.15,
+              -0.06,
+              -0.02,
+              0.02,
+              0.06,
+              0.15,
+              0.3,
+              1e+100
+            ],
+            "actuation_threshold_mps2": 0.1
+          },
+          "identification_loss": {
+            "horizons": [
+              3,
+              6,
+              12
+            ],
+            "horizon_weights": [
+              0.5,
+              0.3,
+              0.2
+            ],
+            "point_weight": 0.25,
+            "huber_beta": 0.02
+          },
+          "rollout_loss": {
+            "horizons": [
+              6,
+              12,
+              30,
+              33
+            ],
+            "horizon_weights": [
+              0.35,
+              0.3,
+              0.2,
+              0.15
+            ],
+            "position_scale": 0.01,
+            "velocity_scale": 0.05,
+            "causal_auxiliary_weight": 0.25,
+            "huber_beta": 1
+          },
+          "stages": [
+            {
+              "name": "stage1",
+              "epochs": 80,
+              "steps": 16,
+              "lr": 0.003,
+              "rollout_weight": 0
+            },
+            {
+              "name": "stage2",
+              "epochs": 50,
+              "steps": 8,
+              "lr": 0.0003,
+              "rollout_weight": 0.5
+            }
+          ],
+          "validation": {
+            "max_windows": 512,
+            "stride": 5,
+            "score_weights": [
+              0.15,
+              0.2,
+              0.325,
+              0.325
+            ],
+            "horizon": 33
+          },
+          "test": {
+            "max_windows": 2048,
+            "stride": 5,
+            "horizons": [
+              6,
+              12,
+              18,
+              24,
+              30,
+              36,
+              42,
+              48,
+              54,
+              60
+            ]
+          },
+          "models": {
+            "output_limit": 0.25,
+            "profile": {
+              "centers": 13,
+              "width": 0.065,
+              "delta_limit": 0.035
+            },
+            "friction": {
+              "vtransition": 0.025,
+              "coulomb_limit": 0.15,
+              "viscous_limit": 0.5
+            },
+            "rbf_pv": {
+              "p_centers": [
+                0,
+                0.0875,
+                0.175,
+                0.2625,
+                0.35,
+                0.4375,
+                0.525,
+                0.6125,
+                0.7
+              ],
+              "v_centers": [
+                -0.5,
+                -0.3,
+                -0.15,
+                -0.06,
+                0,
+                0.06,
+                0.15,
+                0.3,
+                0.5
+              ],
+              "widths": [
+                0.1,
+                0.1
+              ],
+              "ood_gate": false,
+              "coefficient_clamp": false
+            },
+            "mlp": {
+              "hidden": [
+                16,
+                16
+              ],
+              "activation": "tanh",
+              "l2": 1e-05
+            },
+            "difference_regularization": [
+              0.002,
+              0.01
+            ]
+          }
+        },
+        "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+        "train_window_hash": "217ac94e4b40937454dea8cfe322e4b7ecd7c409fef86c99228c7b645f078ca3",
+        "validation_window_hash": "c3635c3b17298c109b1d1e82c25ef7a267c42ec6bd42196ccc5ac8f7e8b10830",
+        "train_windows": 136964,
+        "validation_windows": 512,
+        "python": "3.10.15",
+        "torch": "2.8.0+cu129",
+        "numpy": "1.26.4",
+        "device": "cpu",
+        "threads": 1,
+        "dtype": "float64",
+        "git_commit": "8dd46cb71c7a4d48d492a9728f9674b4f03cb467"
+      }
+    },
+    "mlp": {
+      "model": "mlp",
+      "run": "runs/mlp_seed7_7cb86219b8f4",
+      "best_validation_score": 0.8687047716113567,
+      "best_epoch": [
+        "stage2",
+        50
+      ],
+      "elapsed_s": 38.82502612983808,
+      "epochs": {
+        "stage1": 46,
+        "stage2": 50
+      },
+      "checkpoint_sha256": "94903bc653faf8bfb8df9f71da195f2885654ae37ad79173692adbb125cf957e",
+      "metadata": {
+        "config_hash": "a6e5ff1781f2fa84bb9860fa3cb4daa8265f8d954e4c719c2d39158cb0077ea1",
+        "sources": {
+          "__init__.py": "0d80f15849629f8bc28d7b3ba94952f459241f8fe5b03e56858960e5a75c45d7",
+          "config.py": "12508b4c2a16d18e0f4178a3c5473666ed95b44fa4a6b176b4c3690d21148ea6",
+          "data.py": "ea7b98557f329c0775060141f395fd165176a78e32a4da925e9158020470b58c",
+          "dynamics.py": "49a7862582c3a5d4a446570f51c86597a74a4081baf002650c09efab140f1556",
+          "losses.py": "64751ec38a2572aed6968959cc0fccf220f9cb66ada66026d94fb4e74db07b1b",
+          "models/__init__.py": "7bdea0ae07bf644c6d97552c12b0eeceba8944bb4a2c68296327a31e3ec15818",
+          "models/mlp.py": "2eda45c6e4fb89b0b715d27eef48c7572553af817a0adb1b6e946aa1e8dfa1f7",
+          "models/structured.py": "3cbf6681532895c5c4db26bf33a23aa7222b60cfc9562ce4f4fddf67c02ebffc",
+          "train.py": "36506c5209b950c5a2ab264e832e1df0f5e3aa7e8fa26d186159cc2b554b6e3e"
+        },
+        "manifest_sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+        "model": "mlp",
+        "run_hash": "7cb86219b8f46a3caf7b62aff5d5bed685472f24d509f2cbcb60b8aac299eacb",
+        "configuration": {
+          "seed": 7,
+          "threads": 1,
+          "dtype": "float64",
+          "device": "cpu",
+          "batch_size": 256,
+          "patience": 20,
+          "min_improvement": 1e-06,
+          "gradient_clip": 1,
+          "legacy": {
+            "data": {
+              "position_bin_edges_m": [
+                0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7
+              ]
+            }
+          },
+          "sampling": {
+            "empirical_fraction": 0.4,
+            "joint_fraction": 0.4,
+            "actuation_fraction": 0.2,
+            "velocity_bin_edges_mps": [
+              -1e+100,
+              -0.3,
+              -0.15,
+              -0.06,
+              -0.02,
+              0.02,
+              0.06,
+              0.15,
+              0.3,
+              1e+100
+            ],
+            "actuation_threshold_mps2": 0.1
+          },
+          "identification_loss": {
+            "horizons": [
+              3,
+              6,
+              12
+            ],
+            "horizon_weights": [
+              0.5,
+              0.3,
+              0.2
+            ],
+            "point_weight": 0.25,
+            "huber_beta": 0.02
+          },
+          "rollout_loss": {
+            "horizons": [
+              6,
+              12,
+              30,
+              33
+            ],
+            "horizon_weights": [
+              0.35,
+              0.3,
+              0.2,
+              0.15
+            ],
+            "position_scale": 0.01,
+            "velocity_scale": 0.05,
+            "causal_auxiliary_weight": 0.25,
+            "huber_beta": 1
+          },
+          "stages": [
+            {
+              "name": "stage1",
+              "epochs": 80,
+              "steps": 16,
+              "lr": 0.003,
+              "rollout_weight": 0
+            },
+            {
+              "name": "stage2",
+              "epochs": 50,
+              "steps": 8,
+              "lr": 0.0003,
+              "rollout_weight": 0.5
+            }
+          ],
+          "validation": {
+            "max_windows": 512,
+            "stride": 5,
+            "score_weights": [
+              0.15,
+              0.2,
+              0.325,
+              0.325
+            ],
+            "horizon": 33
+          },
+          "test": {
+            "max_windows": 2048,
+            "stride": 5,
+            "horizons": [
+              6,
+              12,
+              18,
+              24,
+              30,
+              36,
+              42,
+              48,
+              54,
+              60
+            ]
+          },
+          "models": {
+            "output_limit": 0.25,
+            "profile": {
+              "centers": 13,
+              "width": 0.065,
+              "delta_limit": 0.035
+            },
+            "friction": {
+              "vtransition": 0.025,
+              "coulomb_limit": 0.15,
+              "viscous_limit": 0.5
+            },
+            "rbf_pv": {
+              "p_centers": [
+                0,
+                0.0875,
+                0.175,
+                0.2625,
+                0.35,
+                0.4375,
+                0.525,
+                0.6125,
+                0.7
+              ],
+              "v_centers": [
+                -0.5,
+                -0.3,
+                -0.15,
+                -0.06,
+                0,
+                0.06,
+                0.15,
+                0.3,
+                0.5
+              ],
+              "widths": [
+                0.1,
+                0.1
+              ],
+              "ood_gate": false,
+              "coefficient_clamp": false
+            },
+            "mlp": {
+              "hidden": [
+                16,
+                16
+              ],
+              "activation": "tanh",
+              "l2": 1e-05
+            },
+            "difference_regularization": [
+              0.002,
+              0.01
+            ]
+          }
+        },
+        "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+        "train_window_hash": "217ac94e4b40937454dea8cfe322e4b7ecd7c409fef86c99228c7b645f078ca3",
+        "validation_window_hash": "c3635c3b17298c109b1d1e82c25ef7a267c42ec6bd42196ccc5ac8f7e8b10830",
+        "train_windows": 136964,
+        "validation_windows": 512,
+        "python": "3.10.15",
+        "torch": "2.8.0+cu129",
+        "numpy": "1.26.4",
+        "device": "cpu",
+        "threads": 1,
+        "dtype": "float64",
+        "git_commit": "8dd46cb71c7a4d48d492a9728f9674b4f03cb467"
+      }
+    },
+    "structured": {
+      "model": "structured",
+      "run": "runs/structured_seed7_7cb86219b8f4",
+      "best_validation_score": 0.9236790266308037,
+      "best_epoch": [
+        "stage2",
+        37
+      ],
+      "elapsed_s": 51.25167292403057,
+      "epochs": {
+        "stage1": 52,
+        "stage2": 50
+      },
+      "checkpoint_sha256": "e0caec07ee0d1398b07dc6b09764e5cf412e34e3ddc43b75e42f215ac31ba1f8",
+      "metadata": {
+        "config_hash": "a6e5ff1781f2fa84bb9860fa3cb4daa8265f8d954e4c719c2d39158cb0077ea1",
+        "sources": {
+          "__init__.py": "0d80f15849629f8bc28d7b3ba94952f459241f8fe5b03e56858960e5a75c45d7",
+          "config.py": "12508b4c2a16d18e0f4178a3c5473666ed95b44fa4a6b176b4c3690d21148ea6",
+          "data.py": "ea7b98557f329c0775060141f395fd165176a78e32a4da925e9158020470b58c",
+          "dynamics.py": "49a7862582c3a5d4a446570f51c86597a74a4081baf002650c09efab140f1556",
+          "losses.py": "64751ec38a2572aed6968959cc0fccf220f9cb66ada66026d94fb4e74db07b1b",
+          "models/__init__.py": "7bdea0ae07bf644c6d97552c12b0eeceba8944bb4a2c68296327a31e3ec15818",
+          "models/mlp.py": "2eda45c6e4fb89b0b715d27eef48c7572553af817a0adb1b6e946aa1e8dfa1f7",
+          "models/structured.py": "3cbf6681532895c5c4db26bf33a23aa7222b60cfc9562ce4f4fddf67c02ebffc",
+          "train.py": "36506c5209b950c5a2ab264e832e1df0f5e3aa7e8fa26d186159cc2b554b6e3e"
+        },
+        "manifest_sha256": "34afdfe6334aa6ca5626b95a58a550f33f9fee5baa1c23a368f06bbf036f880a",
+        "model": "structured",
+        "run_hash": "7cb86219b8f46a3caf7b62aff5d5bed685472f24d509f2cbcb60b8aac299eacb",
+        "configuration": {
+          "seed": 7,
+          "threads": 1,
+          "dtype": "float64",
+          "device": "cpu",
+          "batch_size": 256,
+          "patience": 20,
+          "min_improvement": 1e-06,
+          "gradient_clip": 1,
+          "legacy": {
+            "data": {
+              "position_bin_edges_m": [
+                0,
+                0.1,
+                0.2,
+                0.3,
+                0.4,
+                0.5,
+                0.6,
+                0.7
+              ]
+            }
+          },
+          "sampling": {
+            "empirical_fraction": 0.4,
+            "joint_fraction": 0.4,
+            "actuation_fraction": 0.2,
+            "velocity_bin_edges_mps": [
+              -1e+100,
+              -0.3,
+              -0.15,
+              -0.06,
+              -0.02,
+              0.02,
+              0.06,
+              0.15,
+              0.3,
+              1e+100
+            ],
+            "actuation_threshold_mps2": 0.1
+          },
+          "identification_loss": {
+            "horizons": [
+              3,
+              6,
+              12
+            ],
+            "horizon_weights": [
+              0.5,
+              0.3,
+              0.2
+            ],
+            "point_weight": 0.25,
+            "huber_beta": 0.02
+          },
+          "rollout_loss": {
+            "horizons": [
+              6,
+              12,
+              30,
+              33
+            ],
+            "horizon_weights": [
+              0.35,
+              0.3,
+              0.2,
+              0.15
+            ],
+            "position_scale": 0.01,
+            "velocity_scale": 0.05,
+            "causal_auxiliary_weight": 0.25,
+            "huber_beta": 1
+          },
+          "stages": [
+            {
+              "name": "stage1",
+              "epochs": 80,
+              "steps": 16,
+              "lr": 0.003,
+              "rollout_weight": 0
+            },
+            {
+              "name": "stage2",
+              "epochs": 50,
+              "steps": 8,
+              "lr": 0.0003,
+              "rollout_weight": 0.5
+            }
+          ],
+          "validation": {
+            "max_windows": 512,
+            "stride": 5,
+            "score_weights": [
+              0.15,
+              0.2,
+              0.325,
+              0.325
+            ],
+            "horizon": 33
+          },
+          "test": {
+            "max_windows": 2048,
+            "stride": 5,
+            "horizons": [
+              6,
+              12,
+              18,
+              24,
+              30,
+              36,
+              42,
+              48,
+              54,
+              60
+            ]
+          },
+          "models": {
+            "output_limit": 0.25,
+            "profile": {
+              "centers": 13,
+              "width": 0.065,
+              "delta_limit": 0.035
+            },
+            "friction": {
+              "vtransition": 0.025,
+              "coulomb_limit": 0.15,
+              "viscous_limit": 0.5
+            },
+            "rbf_pv": {
+              "p_centers": [
+                0,
+                0.0875,
+                0.175,
+                0.2625,
+                0.35,
+                0.4375,
+                0.525,
+                0.6125,
+                0.7
+              ],
+              "v_centers": [
+                -0.5,
+                -0.3,
+                -0.15,
+                -0.06,
+                0,
+                0.06,
+                0.15,
+                0.3,
+                0.5
+              ],
+              "widths": [
+                0.1,
+                0.1
+              ],
+              "ood_gate": false,
+              "coefficient_clamp": false
+            },
+            "mlp": {
+              "hidden": [
+                16,
+                16
+              ],
+              "activation": "tanh",
+              "l2": 1e-05
+            },
+            "difference_regularization": [
+              0.002,
+              0.01
+            ]
+          }
+        },
+        "dataset_hash": "03305dc728375d38fb373a713e669c1f71bd5ea084da9f5f21f9760eb0574498",
+        "train_window_hash": "217ac94e4b40937454dea8cfe322e4b7ecd7c409fef86c99228c7b645f078ca3",
+        "validation_window_hash": "c3635c3b17298c109b1d1e82c25ef7a267c42ec6bd42196ccc5ac8f7e8b10830",
+        "train_windows": 136964,
+        "validation_windows": 512,
+        "python": "3.10.15",
+        "torch": "2.8.0+cu129",
+        "numpy": "1.26.4",
+        "device": "cpu",
+        "threads": 1,
+        "dtype": "float64",
+        "git_commit": "8dd46cb71c7a4d48d492a9728f9674b4f03cb467"
+      }
+    }
+  },
+  "diagnostics": {
+    "nominal": {
+      "point_acceleration_rmse_mps2": 0.21353442190867433,
+      "point_acceleration_mae_mps2": 0.10704382654058153,
+      "point_count": 10616,
+      "point_saturation_fraction": 0.0,
+      "rollout_stage_saturation_fraction": 0.0,
+      "nonfinite_stage_residuals": 0,
+      "nonfinite_prediction_values": 0,
+      "trainable_parameters": 0
+    },
+    "profile_only": {
+      "point_acceleration_rmse_mps2": 0.20317620123957378,
+      "point_acceleration_mae_mps2": 0.09475486032728316,
+      "point_count": 10616,
+      "point_saturation_fraction": 0.0,
+      "rollout_stage_saturation_fraction": 0.0,
+      "nonfinite_stage_residuals": 0,
+      "nonfinite_prediction_values": 0,
+      "trainable_parameters": 13
+    },
+    "friction_only": {
+      "point_acceleration_rmse_mps2": 0.21567055214372105,
+      "point_acceleration_mae_mps2": 0.10797990643261533,
+      "point_count": 10616,
+      "point_saturation_fraction": 0.0,
+      "rollout_stage_saturation_fraction": 0.0,
+      "nonfinite_stage_residuals": 0,
+      "nonfinite_prediction_values": 0,
+      "trainable_parameters": 26
+    },
+    "rbf_pv": {
+      "point_acceleration_rmse_mps2": 0.20430387135408518,
+      "point_acceleration_mae_mps2": 0.09131946266636046,
+      "point_count": 10616,
+      "point_saturation_fraction": 0.0,
+      "rollout_stage_saturation_fraction": 0.0,
+      "nonfinite_stage_residuals": 0,
+      "nonfinite_prediction_values": 0,
+      "trainable_parameters": 81
+    },
+    "mlp": {
+      "point_acceleration_rmse_mps2": 0.19700048717262827,
+      "point_acceleration_mae_mps2": 0.07287172096266356,
+      "point_count": 10616,
+      "point_saturation_fraction": 9.419743782969103e-05,
+      "rollout_stage_saturation_fraction": 0.0011998685075608152,
+      "nonfinite_stage_residuals": 0,
+      "nonfinite_prediction_values": 0,
+      "trainable_parameters": 385
+    },
+    "structured": {
+      "point_acceleration_rmse_mps2": 0.20518656109989966,
+      "point_acceleration_mae_mps2": 0.09473485527864607,
+      "point_count": 10616,
+      "point_saturation_fraction": 0.0,
+      "rollout_stage_saturation_fraction": 0.0,
+      "nonfinite_stage_residuals": 0,
+      "nonfinite_prediction_values": 0,
+      "trainable_parameters": 39
+    }
+  },
+  "evaluation_sources": {
+    "evaluate.py": "6f43c4881adaf3aee1818ca0bf419c1ff37f4f4fcd81f12cecd9be8363af1988",
+    "dynamics.py": "49a7862582c3a5d4a446570f51c86597a74a4081baf002650c09efab140f1556",
+    "data.py": "ea7b98557f329c0775060141f395fd165176a78e32a4da925e9158020470b58c"
+  },
+  "artifact_hashes": {
+    "structured_predictions.npz": "60811a3aca6c26107ff91be802737012c5a6f9965003f6a2a68c073d1a55a5bd",
+    "common_inputs.npz": "88bbc5ac6bc645d2cea96e36ede8b6b3feb2c672db7ae67a2bf88d0d5ab254aa",
+    "windows.json": "e250d1362f7451edaa3bd4407268d8644139b666176a27132a324fc1ccd2e2b8",
+    "metrics_long.csv": "592f8c240ff7c14039c60cdacdbcb7998728d14b8563664f7e6ea0e030d5dfc3",
+    "friction_only_predictions.npz": "2c96148f28264ac9a16ff70e8bfa417e2c4cbe4c650d921e524b42415f1dddad",
+    "window_errors.csv": "c5aae97cbc3ade62f90e7cf15a2730134799a41f9c247893f47a0bcf56b738da",
+    "profile_only_predictions.npz": "095982966c5faee9766e2aecfd5b0ff4c6d4e21893f2b70d2d680da135ba2f96",
+    "nominal_predictions.npz": "a3f9b5aae0aca26cfb74db834d5c8f1499656157ff78bc7e6033d7bbcfd8da44",
+    "rbf_pv_predictions.npz": "4d62d79f75a418f376ab3b8ccc67fd0ab1dfe3ce8f3421337329c2a29e76bafc",
+    "mlp_predictions.npz": "a1e5ec28f129f07fc71b0b6f8f8b9d06bf963ecce3f7642121496ba33a6c6e78"
+  }
+}

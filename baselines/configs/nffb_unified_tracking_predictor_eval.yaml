@@ -1,5 +1,5 @@
 env_config: environments/configs/unified_tracking_constant.yaml
-policy_config: baselines/configs/nffb_sine_phase0_acc5.yaml
+policy_config: baselines/configs/nffb_optimal.yaml
 
 # The singleton environment currently uses D=8 and H=10. NFFB needs H>=D+1
 # because its acceleration feedforward consumes vg_D and vg_{D+1}.
@@ -12,9 +12,9 @@ policy_overrides:
     max_acc: auto
     max_velocity: auto
     velocity_response_enabled: true
-    velocity_response_tau_s: 0.155
-    velocity_response_gain: 0.86
-    velocity_response_bias: -0.0035
+    velocity_response_tau_s: 0.187
+    velocity_response_gain: 1.0
+    velocity_response_bias: -0.00485
     velocity_response_max_abs_velocity: auto
     plank_length: auto
     rope_length: auto
@@ -32,5 +32,5 @@ runner:
   save_rollout: true
 
 logging:
-  root_dir: logs/nffb/unified_tracking
+  root_dir: logs/nffb/unified_tracking_icra/wo_response_compensation
   run_name: nffb_unified_predictor

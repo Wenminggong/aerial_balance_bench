@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
+from baselines.acados_nmpc_core import (
+    AcadosNMPCControllerCfg,
+    AcadosNMPCModelCfg,
+    AcadosNMPCSolverCfg,
+    discrete_dynamics_numpy,
+)
 from baselines.base_policy import ObservationIndex
 from baselines.model_state_predictor import (
     VelocityModelStatePredictor,
@@ -345,10 +352,59 @@ def test_exact_first_order_response_updates_vrz_drz_and_arz():
     second_vrz = (1.0 - decay**2) * response_target
     assert prediction[0, ObservationIndex.VRZ].item() == pytest.approx(second_vrz)
     assert prediction[0, ObservationIndex.DRZ].item() == pytest.approx(
-        0.1 * (first_vrz + second_vrz)
+        0.2 * response_target * decay**2
     )
     assert prediction[0, ObservationIndex.ARZ].item() == pytest.approx(
         (second_vrz - first_vrz) / 0.1
+    )
+
+
+def test_rk4_response_profile_matches_acados_discrete_dynamics():
+    tau_s = 0.2
+    gain = 0.9
+    bias = -0.01
+    command_z = 0.3
+    predictor = VelocityModelStatePredictor(
+        make_cfg(
+            delay_step=1,
+            solver="rk4",
+            velocity_response_enabled=True,
+            velocity_response_tau_s=tau_s,
+            velocity_response_gain=gain,
+            velocity_response_bias=bias,
+        ),
+        1,
+        "cpu",
+    )
+    set_pending_commands(predictor, torch.tensor([command_z]))
+    observation = make_observation(1, vrz=-0.1)
+    observation[0, ObservationIndex.VB] = 0.02
+    observation[0, ObservationIndex.THETA] = 0.05
+
+    prediction = predictor.predict(observation)
+    controller_cfg = AcadosNMPCControllerCfg(
+        model=AcadosNMPCModelCfg(
+            plank_length=predictor.plank_length,
+            rope_length=predictor.rope_length,
+            ball_position_offset=predictor.ball_position_offset,
+            gravity=predictor.gravity,
+            ball_mass=predictor.ball_mass,
+            ball_radius=predictor.ball_radius,
+            ball_inertia_ratio=predictor.ball_inertia_ratio,
+            epsilon=predictor.epsilon,
+        ),
+        solver=AcadosNMPCSolverCfg(step_dt=predictor.step_dt),
+    )
+    state = np.array([[0.35, 0.02, 0.05, -0.1, 0.0]], dtype=np.float64)
+    action = np.array([[command_z]], dtype=np.float64)
+    parameters = np.array([[0.35, 0.0, tau_s, gain, bias]], dtype=np.float64)
+    expected = discrete_dynamics_numpy(state, action, parameters, controller_cfg)[0]
+
+    np.testing.assert_allclose(
+        prediction[0, [ObservationIndex.PB, ObservationIndex.VB, ObservationIndex.THETA, ObservationIndex.VRZ]].numpy(),
+        expected[:4],
+        rtol=2.0e-6,
+        atol=2.0e-6,
     )
 
 
