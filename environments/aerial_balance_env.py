@@ -168,10 +168,12 @@ class AerialBalanceEnv(DirectRLEnv):
         action = self.robustness.before_action(self, action)
         command = self._pre_physics_step(action)
         self.robustness.after_command_update(self, command)
+        self.robustness.prepare_human_step(self)
 
         for _ in range(self.cfg.decimation):
             self._sim_step_counter += 1
             self._apply_action()
+            self.robustness.before_physics_step(self)
             self.episode_physics_length_buf += 1
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
@@ -242,6 +244,7 @@ class AerialBalanceEnv(DirectRLEnv):
 
         self.initial_drone_z[env_ids] = self._compute_drone_z()[env_ids]
         self._update_state_from_sim(env_ids=env_ids, zero_derivatives=True)
+        self.robustness.after_state_reset(self, env_ids)
         self.evaluator.reset_episode(env_ids)
 
     def _pre_physics_step(self, actions: torch.Tensor):

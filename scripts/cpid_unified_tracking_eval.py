@@ -104,6 +104,7 @@ from aerial_balance_bench.baselines import (
     validate_reference_preview_horizon,
 )
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
+from aerial_balance_bench.environments.robustness.human_behavior import HUMAN_STEP_EXTRA_FIELDS
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
 
 
@@ -122,6 +123,7 @@ LEGACY_OBSERVATION_FIELDS = (
 )
 
 STEP_EXTRA_FIELDS = (
+    *HUMAN_STEP_EXTRA_FIELDS,
     "pb",
     "pg",
     "vg",

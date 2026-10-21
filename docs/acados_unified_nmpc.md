@@ -2,6 +2,8 @@
 
 本文档给出 'AcadosNMPCPolicy' 的完整数学 formulation 以及论文符号到实际实现的逐项映射。该控制器是独立的新 baseline；原有基于 do-mpc 的 'NMPCPolicy'、runner 和 YAML 均未被替换或修改。
 
+默认模型保留人端速度为零的反应式假设。可选的实测人速度扩展见[第 15 节](#15-实测人速度的常值预测控制)，它同步作用于延迟 predictor 和 OCP。
+
 ## 1. 问题定义和实际向量
 
 控制周期记为 $h>0$，预测步数为 $N$，当前时刻为 $k$。对任意预测 stage $i=0,\ldots,N$，定义
@@ -534,3 +536,162 @@ $$
 独立 seed 669、96 个首 episode 的验证覆盖 34 个 constant、22 个 random B-spline 和 40 个 random ramp-dwell episode。结果为：constant 成功率 $100\%$、最后 1 s MAE $0.065\,\mathrm{mm}$，random B-spline 平均 MAE $9.42\,\mathrm{mm}$，random ramp-dwell 平均 MAE $6.35\,\mathrm{mm}$。该验证中无 termination、boundary violation、fallback 或 active slack，solver success rate 为 $100\%$。单环境独立计时丢弃前 30 步后使用 270 个样本，完整 `act()` p99 为 $3.66\,\mathrm{ms}$，最大值 $4.23\,\mathrm{ms}$，60 Hz deadline-miss rate 为 0。
 
 完整的逐轮候选、独立验证和计时结果保存在 `logs/acados_nmpc_unified_tracking/tuning/performance_v2/`。这些数值是当前 mixed 配置和 nominal response 参数下的经验结果，不应解释为对未见轨迹、模型失配或真实系统的无条件性能保证。
+
+
+## 15. 实测人速度的常值预测控制
+
+### 开关与兼容性
+
+```yaml
+acados_nmpc_policy:
+  human_motion:
+    enabled: false
+```
+
+默认关闭，旧 YAML 和 `act(observations)` 调用保持有效。开启后，现有
+`AcadosNMPCPolicy`、`VelocityModelStatePredictor` 和 acados runner 使用同一次
+实测人端竖直速度。此开关不启用 predictor、不改变其延迟步数。`D=0` 或 predictor
+关闭时，人速度直接用于 NMPC。其他 baseline 不传新参数，保持原模型。
+
+原 11 维观测前缀、reference preview、五维优化状态、一维增量动作、无人机接口、
+人行为生成、奖励和 evaluator 均不改变。此扩展不预测人的意图、未来 OU 噪声、
+未来协作 CPID 动作或人端加速度，也没有额外的测量延迟或滤波。
+
+### 相对速度几何与零阶保持
+
+在动作 $a_k$ 计算前读取实际关节速度 $\hat v_{h,k}=v_{h,z}(t_k)$（m/s，向上为正），
+本次决策中令
+
+$$
+\hat v_{h,k+j|k}=\hat v_{h,k},\quad j=0,\ldots,D+N.
+$$
+
+下一次 `act()` 重新读取；不是整条 episode 使用一个速度。几何关系改为
+
+$$
+\omega(\theta,v_{rz},\hat v_h)=
+\frac{(\hat v_h-v_{rz})\cos\beta(\theta)}
+{L\,\operatorname{safe}_{\epsilon}(\cos(\beta(\theta)-\theta))}.
+$$
+
+保留第 2 节的绳角、arcsine 截断、符号保持分母保护及球坐标偏移，球加速度为
+
+$$
+a_b=\gamma[(p_b+d_b-L)\omega^2-g\sin\theta].
+$$
+
+只在这个几何关系中使用相对速度。无人机一阶速度响应、绝对 `vrz`、命令累加器
+及 predictor 的 `drz` 积分保持不变。人和无人机速度相等时几何角速度为零；
+无人机静止且人上升时，正常几何范围内梁角速度为正。
+
+NumPy、CasADi 和 Torch 使用相同修正。Euler/RK4 每个求导节点均传入当前人速度，
+无人机响应仍取各节点自己的速度。predictor 最后的 `ab/omega/alpha` 也从修正后的
+导数计算。阶段、初始阶段和终端代价中的 `omega` 残差同步修正，权重、残差维数
+及其余代价项保持不变。
+
+### 延迟与 NMPC 时序
+
+1. 从当前观测及命令队列推进 $D$ 个 predictor 步，始终保持 $\hat v_{h,k}$。
+2. 将预测状态 $\hat x_{k+D|k}$ 作为 OCP 初始状态，参考依旧从 $k+D$ 开始。
+3. OCP 的 $0,\ldots,N$ 全部阶段（包括终端）使用同一个 $\hat v_{h,k}$。
+4. 人速度不再额外延迟；下一个控制周期更新测量。
+
+$D=4,N=30,h=1/60$ 时完整保持区间是 $(D+N)h\approx0.567$ s。
+动作延迟补偿只有约 0.067 s，但 NMPC 的常值外推最长约半秒，换向和快速协作动作
+可能使该假设失准。改善短时状态预测并不保证完整闭环性能一定改善。
+
+### 输入与 reset 契约
+
+```python
+policy.act(observations, {
+    "human_motion": {"velocity_z": measured_joint_velocity},
+})
+```
+
+`velocity_z` 必须为 `(num_envs,)` 或 `(num_envs, 1)` Tensor，policy 转成设备上的
+`float32` 并检查有限性。开启时缺失、形状错误或 NaN/Inf 在求解前报错，不被求解器
+失败回退吞掉；关闭时无需该输入，诊断中的使用值为零。
+
+runner 在每次 `act()` 前 clone
+`base_env.robustness.get_state()["human_vel_z"]` 并构造单独的 extras。
+不能使用 `infos["step"]["human_vel_z"]`：该字段保留终止前快照，而 autoreset 后
+返回观测属于新 episode。manager 在 reset 后刷新实际测量，因此读取当前状态
+能与当前观测对齐。原 `infos`、终止步日志不被修改。
+
+predictor 新接口为
+`predict(observation, error_prev1=None, *, reference_positions=None, human_velocity_z=None)`。
+`None` 每次都表示零，不复用上一次输入。诊断 buffer 支持局部 reset 和 `.to(device)`；
+predictor 不推进时，其 `human_velocity_z_used` 为零，即未用于延迟积分。
+
+### 参数结构与代码生成缓存
+
+| 模式 | 阶段参数顺序 | 维数 |
+|---|---|---:|
+| 关闭 | `[pg, vg, tau_s, gain, bias]` | 5 |
+| 开启 | `[pg, vg, tau_s, gain, bias, human_vel_z]` | 6 |
+
+`NP=5` 和 `PARAMETER_FIELDS` 保持历史含义，使用 `parameter_fields(cfg)` 和
+`parameter_dimension(cfg)` 获取有效结构。policy 和 core 共享 `HumanMotionCfg`，
+没有第二个人运动开关。NumPy 输入、OCP 初始化及单／批量求解使用相同 schema。
+
+fingerprint schema 升至 3，包含开关、有效参数结构和维数。两种模型使用独立缓存，
+不会误用原二进制；历史缓存不删除。实时速度只作为阶段参数，不参与 fingerprint，
+不引起逐步重编译。warm start、限幅和失败回退规则不变。
+
+### 运行与日志
+
+一对配置共用当前环境和基础 policy，仅开关及输出名称不同；不重新调权重：
+
+```bash
+python scripts/acados_nmpc_unified_eval.py \
+  --config baselines/configs/acados_nmpc_human_reactive_eval.yaml \
+  --num_envs 16 --episodes 16 --headless
+python scripts/acados_nmpc_unified_eval.py \
+  --config baselines/configs/acados_nmpc_human_velocity_eval.yaml \
+  --num_envs 16 --episodes 16 --headless
+```
+
+两者默认 seed=666，环境为 `unified_tracking_constant.yaml`（当前 cooperative）。
+比较 random-walk 时，对两次运行使用同一份 `human_behavior_type: random-walk`
+环境配置并通过 `--env_config` 传入。重复运行请用 `--run_name` 指定新名称，
+或将配置中的 `run_name` 设为 null 以使用时间戳，避免覆盖已有 rollout。
+
+rollout NPZ 新增 `(steps, num_envs)` 字段：
+
+- `acados_nmpc_human_motion_enabled`：统一开关。
+- `acados_nmpc_human_velocity_z_used`：本次 OCP 实际使用的人速度。
+- `policy_predictor_human_velocity_z_used`：本次延迟积分使用的人速度，未积分时为零。
+
+`*_used[k]` 是动作计算前的测量；`step_human_vel_z[k]` 是动作执行后的实测运动。
+无 reset 时，开启模式下 `*_used[k+1]` 应与 `step_human_vel_z[k]` 对齐；跨 reset
+不能这样比较。关闭模式的 used=0 只表示模型假设，实际手部运动仍保存在 step 字段。
+
+resolved metadata 包含 `parameter_fields`、`parameter_dimension`、`human_motion_enabled`、
+`human_motion_assumption`（开启为 `constant_velocity`）、测量来源及完整配置。
+summary 增加 `human_motion_enabled`，原 evaluator 指标定义保持不变。
+
+### 验证和比较方法
+
+`tests/test_acados_human_motion.py` 覆盖零速度退化、符号、三种动力学实现一致性、
+所有积分节点保持、阶段／终端代价、参数写入、输入校验、fallback、局部 reset
+和当前测量与终止快照的隔离；原 acados/predictor 测试继续执行。
+
+配对比较应固定 seed、初始条件、人参数、随机驱动、响应参数、控制权重和实际延迟。
+cooperative 人行为依赖球状态，所以两种控制器下实际人速度轨迹可以不同。
+报告原 evaluator 的 MAE、RMSE、稳态误差和成功率，并报告 solver/fallback、批量
+policy 耗时和 deadline miss rate。批量运行耗时不等价于单环境硬件实时性能。
+
+离线 predictor 误差对齐 `policy_predicted_*[k]` 与 `observations[k+D]`，排除中间
+发生 reset 的样本。常值假设误差对齐动作前实测速度与未来实测速度，仅用于诊断，
+不将未来真实值传入控制器。可从已有日志复算这些离线诊断：
+
+```bash
+python scripts/analyze_human_motion_rollouts.py \
+  logs/human_drone_collaboration/human_motion_comparison/reactive \
+  logs/human_drone_collaboration/human_motion_comparison/human_velocity \
+  --output /tmp/human_motion_comparison.json
+```
+
+该工具分别报告 $D$ 和 $D+N$ 时刻的常值速度预测误差；速度诊断跳过无法从
+前一步日志重建的初始／reset 后测量，状态预测诊断排除跨 reset 的预测对。短时验证和本次配对结果见
+[人速度建模验证记录](human_motion_validation.md)。

@@ -100,10 +100,12 @@ except Exception:  # pragma: no cover
 from aerial_balance_bench.baselines import AcadosNMPCPolicy, AcadosNMPCPolicyCfg
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
 from aerial_balance_bench.environments.observation_schema import LEGACY_OBSERVATION_FIELDS
+from aerial_balance_bench.environments.robustness.human_behavior import HUMAN_STEP_EXTRA_FIELDS
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
 
 
 STEP_EXTRA_FIELDS = (
+    *HUMAN_STEP_EXTRA_FIELDS,
     "pb",
     "pg",
     "vg",
@@ -370,7 +372,8 @@ def _make_output_dir(run_cfg: dict[str, Any], seed: int, target_episodes: int) -
 
 
 def _tensor_to_numpy(value: torch.Tensor) -> np.ndarray:
-    return value.detach().cpu().numpy()
+    # CPU tensors also need a snapshot: policy.reset()/the next act mutates buffers.
+    return value.detach().to(device="cpu", copy=True).numpy()
 
 
 def _collect_tensor_fields(
@@ -420,6 +423,16 @@ def _timing_summary(values: np.ndarray, deadline_s: float) -> dict[str, float]:
         "controller_time_max": float(np.max(finite)),
         "deadline_miss_rate": float(np.mean(finite > deadline_s)),
     }
+
+
+def _policy_extras(infos: dict[str, Any], base_env: Any, human_motion_enabled: bool) -> dict[str, Any]:
+    """Pair current observations with current measurements, including after autoreset."""
+    extras = dict(infos)
+    if human_motion_enabled:
+        extras["human_motion"] = {
+            "velocity_z": base_env.robustness.get_state()["human_vel_z"].detach().clone()
+        }
+    return extras
 
 
 def main():
@@ -560,7 +573,9 @@ def main():
             obs_records.append(_tensor_to_numpy(observations["policy"]))
             started = time.perf_counter()
             with torch.no_grad():
-                actions = policy.act(observations, infos)
+                actions = policy.act(
+                    observations, _policy_extras(infos, base_env, policy_cfg.human_motion.enabled)
+                )
             act_time_records.append(time.perf_counter() - started)
             state = _collect_tensor_fields(policy.get_state())
             next_observations, reward, terminated, truncated, infos = env.step(actions)
@@ -627,6 +642,7 @@ def main():
             "task_name": env_cfg.task_name,
             "interface_name": env_cfg.interface_name,
             "policy_name": policy_cfg.name,
+            "human_motion_enabled": policy_cfg.human_motion.enabled,
             "mean_reward": float(np.mean(rewards_np)) if rewards_np.size else float("nan"),
             **_timing_summary(act_times, float(base_env.step_dt)),
             "solver_success_rate": float(np.mean(successes)) if successes.size else float("nan"),

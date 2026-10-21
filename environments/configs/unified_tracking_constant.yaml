@@ -30,7 +30,7 @@ unified_tracking_task:
 
 reference_preview:
   enabled: true
-  future_steps: 38
+  future_steps: 34
 
 velocity_interface:
   max_acc: 5.0
@@ -44,8 +44,8 @@ robustness:
   controller_gain_variation_enabled: false
   controller_gain_range: [10.0, 10.0]
   action_delay_enabled: true
-  # delay_step: 4
-  delay_step_choices: [6, 7, 8, 9, 10]
+  delay_step: 4
+  # delay_step_choices: [6, 7, 8, 9, 10]
   velocity_response_enabled: true
   # standard vel response
   # velocity_response_tau_s_range: [0.150, 0.160]
@@ -74,11 +74,24 @@ robustness:
   velocity_response_sim_gain: 1.0127
   velocity_response_sim_bias: -0.000564
   velocity_response_sim_max_abs_velocity: 0.0
-  external_disturbance_enabled: false
+  # external_disturbance_enabled: false
+  # external_disturbance_ou_mu: 0.0
+  # external_disturbance_ou_theta_range: [0.1, 0.3]
+  # external_disturbance_ou_sigma_range: [0.01, 0.05]
+  # external_disturbance_ou_clip: 0.05
+  external_disturbance_enabled: true
+  # human_behavior_type: random-walk
+  # human_behavior_type: cooperative
+  human_behavior_type: disturbed
+  human_ou_enabled: true
+  human_vel_max_acc: 0.5
+  human_pos_feedback_sample: true
   external_disturbance_ou_mu: 0.0
-  external_disturbance_ou_theta_range: [0.1, 0.3]
+  # external_disturbance_ou_theta_range: [0.1, 0.3]
+  external_disturbance_ou_theta_range: [0.5, 1.0]
   external_disturbance_ou_sigma_range: [0.01, 0.05]
-  external_disturbance_ou_clip: 0.05
+  # external_disturbance_ou_clip: 0.10
+  external_disturbance_ou_clip: 0.03
 
 unified_tracking_evaluator:
   num_eval_episodes: 1000

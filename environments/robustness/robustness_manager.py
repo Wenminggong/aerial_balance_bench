@@ -8,6 +8,7 @@ from collections.abc import Sequence
 import torch
 from omni.isaac.lab.utils import configclass
 
+from .human_behavior import HumanBehaviorModel
 from .velocity_response import VelocityResponseModel
 
 
@@ -131,10 +132,55 @@ class RobustnessManagerCfg:
     velocity_response_sim_bias: float = -0.00056
     velocity_response_sim_max_abs_velocity: float = 0.0
     external_disturbance_enabled: bool = False
+    # Shared OU settings for cooperative, random-walk, and disturbed humans.
     external_disturbance_ou_mu: float = 0.0
     external_disturbance_ou_theta_range: tuple[float, float] = (0.1, 0.3)
     external_disturbance_ou_sigma_range: tuple[float, float] = (0.01, 0.05)
     external_disturbance_ou_clip: float = 0.05
+    # Human endpoint model. Legacy disturbance configs select random-walk.
+    human_behavior_type: str = "random-walk"
+    human_angle_kp_min: float = 0.2
+    human_angle_kp_max: float = 0.5
+    human_angle_ti_min: float = 1.0
+    human_angle_ti_max: float = 3.0
+    human_angle_td_min: float = 0.6
+    human_angle_td_max: float = 0.9
+    human_angle_max_theta_change_deg: float = 0.1
+    human_vel_kp_min: float = 2.0
+    human_vel_kp_max: float = 5.0
+    human_vel_ti: float = 1000.0
+    human_vel_td: float = 0.0
+    human_vel_max_acc: float = 0.5
+    human_pos_k_base: float = 3.0
+    human_pos_deadzone: float = 0.05
+    human_pos_corr_max: float = 1.0
+    human_pos_corr_tau: float = 0.01
+    human_pos_feedback_sample: bool = True
+    human_pos_k_base_min: float = 2.0
+    human_pos_k_base_max: float = 4.0
+    human_pos_deadzone_min: float = 0.03
+    human_pos_deadzone_max: float = 0.08
+    human_pos_corr_tau_min: float = 0.0
+    human_pos_corr_tau_max: float = 0.01
+    human_ou_enabled: bool = True
+    # Deprecated, accepted only for old YAML loading; ignored by all modes.
+    # Use external_disturbance_ou_theta_range / sigma_range instead.
+    human_ou_theta: float = 0.15
+    human_ou_sigma: float = 0.01
+    human_behavior_cooperative_wc: float = 1.0
+    human_behavior_cooperative_wd: float = 0.0
+    human_behavior_random_walk_wc: float = 0.0
+    human_behavior_random_walk_wd: float = 0.0
+    human_behavior_disturbed_wc: float = 0.0
+    human_behavior_disturbed_wd: float = -0.1
+    human_behavior_sigma_d: float = 0.1
+    human_behavior_e_scale: float = 0.05
+    human_disturbed_wd_min: float = -0.2
+    human_disturbed_wd_max: float = -0.1
+    human_disturbed_sigma_d_min: float = 0.1
+    human_disturbed_sigma_d_max: float = 0.2
+    human_disturbed_e_scale_min: float = 0.05
+    human_disturbed_e_scale_max: float = 0.1
 
 
 class RobustnessManager:
@@ -142,8 +188,7 @@ class RobustnessManager:
 
     This manager currently implements reset-time ball-mass variation,
     low-level controller gain variation, command-level action delay,
-    plant-matched velocity response, and OU-process fixed-end external
-    disturbances.
+    plant-matched velocity response, and unified human endpoint dynamics.
     """
 
     def __init__(self, cfg: RobustnessManagerCfg, num_envs: int, device: str | torch.device):
@@ -205,14 +250,11 @@ class RobustnessManager:
         self.velocity_response_sim_tau_s = self.velocity_response_model.sim_tau_s
         self.velocity_response_sim_gain = self.velocity_response_model.sim_gain
         self.velocity_response_sim_bias = self.velocity_response_model.sim_bias
-        self.external_disturbance_enabled = torch.full(
-            (num_envs,),
-            float(self._external_disturbance_active()),
-            device=self.device,
-        )
-        self.external_disturbance_vel_z = torch.zeros((num_envs, 1), device=self.device)
-        self.external_disturbance_ou_theta = torch.zeros((num_envs, 1), device=self.device)
-        self.external_disturbance_ou_sigma = torch.zeros((num_envs, 1), device=self.device)
+        self.human_behavior = HumanBehaviorModel(cfg, num_envs, self.device)
+        self.external_disturbance_enabled = self.human_behavior.enabled[:, 0]
+        self.external_disturbance_vel_z = self.human_behavior.vel_cmd
+        self.external_disturbance_ou_theta = self.human_behavior.ou_theta
+        self.external_disturbance_ou_sigma = self.human_behavior.ou_sigma
 
     def reset(self, env, env_ids: Sequence[int] | torch.Tensor):
         """Apply reset-time randomization for selected environments."""
@@ -264,36 +306,42 @@ class RobustnessManager:
             return command_state
         return self._apply_velocity_response(env, command_state)
 
-    def after_physics_step(self, env):
-        """Apply step-time perturbations after each physics step."""
-        if not self._external_disturbance_active():
-            self.external_disturbance_enabled[:] = 0.0
-            self.external_disturbance_vel_z.zero_()
-            self._set_external_disturbance_target(env)
-            return None
-
-        dt = float(getattr(env, "physics_dt", 0.0))
-        if dt <= 0.0:
-            raise ValueError("env.physics_dt must be positive for external disturbance integration.")
-
-        mu = float(self.cfg.external_disturbance_ou_mu)
-        noise_delta = self.external_disturbance_ou_theta * (mu - self.external_disturbance_vel_z) * dt
-        noise_delta += self.external_disturbance_ou_sigma * math.sqrt(dt) * torch.randn_like(
-            self.external_disturbance_vel_z
+    def prepare_human_step(self, env):
+        """Generate one human velocity ramp from the current task reference."""
+        pg, _ = env.task.get_reference(env.episode_length_buf)
+        self.human_behavior.prepare_step(
+            env.pb - pg, env.theta,
+            env.drone_rope_plank.data.joint_pos[:, env.slider_holder_joint_ids],
+            env.step_dt, env.cfg.decimation,
         )
-        self.external_disturbance_vel_z += noise_delta
 
-        clip = float(self.cfg.external_disturbance_ou_clip)
-        if clip > 0.0:
-            self.external_disturbance_vel_z.clamp_(min=-clip, max=clip)
-
-        self.external_disturbance_enabled[:] = 1.0
+    def before_physics_step(self, env):
+        """Submit this substep's endpoint target before scene data is written."""
+        self.human_behavior.advance_substep()
         self._set_external_disturbance_target(env)
-        return None
+
+    def after_physics_step(self, env):
+        """Measure endpoint motion after the scene has been refreshed."""
+        self._record_human_measurement(env)
+
+    def _record_human_measurement(self, env, env_ids=None, *, accumulate: bool = True):
+        data = env.drone_rope_plank.data
+        joints = env.slider_holder_joint_ids
+        self.human_behavior.record_measurement(
+            data.joint_pos[:, joints], data.joint_vel[:, joints], data.joint_acc[:, joints],
+            env_ids, accumulate=accumulate,
+        )
+
+    def after_state_reset(self, env, env_ids: torch.Tensor):
+        """Initialize histories only after task reset and state refresh finish."""
+        pg, _ = env.task.get_reference(env.episode_length_buf)
+        self.human_behavior.initialize_history(env_ids, env.pb - pg)
+        self._record_human_measurement(env, env_ids, accumulate=False)
 
     def get_state(self) -> dict[str, torch.Tensor]:
         """Return robustness state for logging and diagnostics."""
         return {
+            **self.human_behavior.get_state(),
             "ball_mass": self.ball_mass,
             "low_level_controller_gain": self.low_level_controller_gain,
             "position_gain": self.position_gain,
@@ -770,41 +818,14 @@ class RobustnessManager:
                 raise ValueError(f"robustness.{field_name} values must be {relation}.")
         return min_value, max_value
 
-    def _external_disturbance_active(self) -> bool:
-        return bool(self.cfg.enabled and self.cfg.external_disturbance_enabled)
-
     def _reset_external_disturbance(self, env, env_ids: torch.Tensor):
-        active = self._external_disturbance_active()
-        self.external_disturbance_enabled[env_ids] = float(active)
-        self.external_disturbance_vel_z[env_ids] = 0.0
-
-        if not active:
-            self.external_disturbance_ou_theta[env_ids] = 0.0
-            self.external_disturbance_ou_sigma[env_ids] = 0.0
-            self._set_external_disturbance_target(env)
-            return
-
-        count = int(env_ids.numel())
-        self.external_disturbance_ou_theta[env_ids, 0] = self._sample_ou_parameter(
-            count,
-            self.cfg.external_disturbance_ou_theta_range,
-            "external_disturbance_ou_theta_range",
+        self.human_behavior.reset(
+            env_ids, env.drone_rope_plank.data.default_joint_pos[:, env.slider_holder_joint_ids]
         )
-        self.external_disturbance_ou_sigma[env_ids, 0] = self._sample_ou_parameter(
-            count,
-            self.cfg.external_disturbance_ou_sigma_range,
-            "external_disturbance_ou_sigma_range",
+        env.drone_rope_plank.set_joint_velocity_target(
+            target=self.external_disturbance_vel_z[env_ids],
+            joint_ids=env.slider_holder_joint_ids, env_ids=env_ids,
         )
-        self._set_external_disturbance_target(env)
-
-    def _sample_ou_parameter(self, count: int, bounds: Sequence[float], field_name: str) -> torch.Tensor:
-        min_value, max_value = (float(value) for value in bounds)
-        if min_value < 0.0 or max_value < 0.0:
-            raise ValueError(f"robustness.{field_name} values must be non-negative.")
-        if min_value > max_value:
-            raise ValueError(f"robustness.{field_name} must be ordered as [min, max].")
-        unit = torch.rand(count, device=self.device)
-        return min_value + (max_value - min_value) * unit
 
     def _set_external_disturbance_target(self, env):
         env.drone_rope_plank.set_joint_velocity_target(

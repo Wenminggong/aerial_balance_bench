@@ -1,3 +1,4 @@
+# Uses unified random-walk human motion, not the historical pure OU protocol.
 env_config: environments/configs/template_eval_disturbance.yaml
 policy_config: baselines/configs/nmpc_predictor_15.yaml
 

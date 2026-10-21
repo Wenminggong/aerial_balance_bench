@@ -14,17 +14,19 @@ import torch
 
 from .acados_nmpc_core import (
     ACADOS_SUPPORTED_VERSION,
-    NP,
     AcadosNMPCConstraintsCfg,
     AcadosNMPCController,
     AcadosNMPCControllerCfg,
     AcadosNMPCModelCfg,
     AcadosNMPCObjectiveCfg,
     AcadosNMPCSolverCfg,
+    HumanMotionCfg,
     acados_source_revision,
     acados_template_distribution_version,
     controller_fingerprint,
     installed_acados_version,
+    parameter_dimension,
+    parameter_fields,
     validate_controller_cfg,
 )
 from .base_policy import BasePolicy, BasePolicyCfg, ObservationIndex
@@ -66,6 +68,7 @@ class AcadosNMPCPolicyCfg(BasePolicyCfg):
     objective: AcadosNMPCObjectiveCfg = field(default_factory=AcadosNMPCObjectiveCfg)
     constraints: AcadosNMPCConstraintsCfg = field(default_factory=AcadosNMPCConstraintsCfg)
     solver: AcadosNMPCSolverCfg = field(default_factory=AcadosNMPCSolverCfg)
+    human_motion: HumanMotionCfg = field(default_factory=HumanMotionCfg)
     response: AcadosNMPCResponseCfg = field(default_factory=AcadosNMPCResponseCfg)
     state_predictor: VelocityModelStatePredictorCfg = field(
         default_factory=VelocityModelStatePredictorCfg
@@ -128,6 +131,7 @@ class AcadosNMPCPolicy(BasePolicy):
             objective=cfg.objective,
             constraints=cfg.constraints,
             solver=cfg.solver,
+            human_motion=cfg.human_motion,
         )
         validate_controller_cfg(self.controller_cfg)
         self.n_horizon = int(cfg.solver.n_horizon)
@@ -150,6 +154,9 @@ class AcadosNMPCPolicy(BasePolicy):
             build_root=build_root,
         )
 
+        self.human_velocity_z_used = torch.zeros(
+            (self.num_envs,), device=self.device, dtype=torch.float32
+        )
         self.model_state = torch.zeros((self.num_envs, 5), device=self.device)
         self.action = torch.zeros((self.num_envs, 1), device=self.device)
         self.reference_pg = torch.zeros(
@@ -195,6 +202,7 @@ class AcadosNMPCPolicy(BasePolicy):
         id_list = [int(value) for value in ids.detach().cpu().tolist()]
         self.controller.reset(id_list)
         self.state_predictor.reset(ids)
+        self.human_velocity_z_used[ids] = 0.0
         self.model_state[ids] = 0.0
         self.action[ids] = 0.0
         self.reference_pg[ids] = 0.0
@@ -220,7 +228,6 @@ class AcadosNMPCPolicy(BasePolicy):
         extras: dict | None = None,
     ) -> torch.Tensor:
         """Compute one bounded velocity-command increment per environment."""
-        del extras
         policy_start = time.perf_counter()
         raw = self._extract_policy_observation(observations)
         expected_shape = (self.num_envs, len(self.raw_observation_fields))
@@ -232,14 +239,15 @@ class AcadosNMPCPolicy(BasePolicy):
         if not torch.all(torch.isfinite(raw)):
             raise ValueError("AcadosNMPCPolicy observation must be finite.")
 
+        human_velocity_z = self._human_velocity_input(extras)
         legacy = raw[:, self._field_indices["legacy"]]
         if self.state_predictor.active:
             delay_refs = raw[:, self._field_indices["predictor_pg"]]
             model_observation = self.state_predictor.predict(
-                legacy, reference_positions=delay_refs
+                legacy, reference_positions=delay_refs, human_velocity_z=human_velocity_z
             )
         else:
-            model_observation = self.state_predictor.predict(legacy)
+            model_observation = self.state_predictor.predict(legacy, human_velocity_z=human_velocity_z)
 
         state = torch.stack(
             (
@@ -254,7 +262,7 @@ class AcadosNMPCPolicy(BasePolicy):
         pg = raw[:, self._field_indices["ocp_pg"]]
         vg = raw[:, self._field_indices["ocp_vg"]]
         parameters = torch.empty(
-            (self.num_envs, self.n_horizon + 1, NP),
+            (self.num_envs, self.n_horizon + 1, parameter_dimension(self.controller_cfg)),
             device=self.device,
             dtype=torch.float32,
         )
@@ -263,6 +271,8 @@ class AcadosNMPCPolicy(BasePolicy):
         parameters[..., 2] = float(self.cfg.response.tau_s)
         parameters[..., 3] = float(self.cfg.response.gain)
         parameters[..., 4] = float(self.cfg.response.bias)
+        if self.cfg.human_motion.enabled:
+            parameters[..., 5] = self.human_velocity_z_used[:, None]
 
         try:
             result = self.controller.solve(
@@ -322,6 +332,23 @@ class AcadosNMPCPolicy(BasePolicy):
         self.policy_wall_time.fill_(time.perf_counter() - policy_start)
         return action.clone()
 
+    def _human_velocity_input(self, extras: dict | None) -> torch.Tensor | None:
+        """Validate a fresh measurement before entering the solver fallback boundary."""
+        self.human_velocity_z_used.zero_()
+        if not self.cfg.human_motion.enabled:
+            return None
+        section = extras.get("human_motion") if isinstance(extras, Mapping) else None
+        value = section.get("velocity_z") if isinstance(section, Mapping) else None
+        if not isinstance(value, torch.Tensor):
+            raise ValueError('human_motion.enabled requires extras["human_motion"]["velocity_z"] as a tensor.')
+        if value.shape not in ((self.num_envs,), (self.num_envs, 1)):
+            raise ValueError("human_motion.velocity_z must have shape (num_envs,) or (num_envs, 1).")
+        value = value.to(device=self.device, dtype=torch.float32).reshape(self.num_envs)
+        if not torch.all(torch.isfinite(value)):
+            raise ValueError("human_motion.velocity_z must be finite.")
+        self.human_velocity_z_used.copy_(value)
+        return self.human_velocity_z_used
+
     def _copy_result_diagnostics(self, result: Any, status: torch.Tensor, fallback: torch.Tensor) -> None:
         self.solver_status.copy_(status.reshape(self.num_envs))
         self.fallback.copy_(fallback.to(dtype=torch.float32).reshape(self.num_envs))
@@ -341,6 +368,10 @@ class AcadosNMPCPolicy(BasePolicy):
     def get_state(self) -> dict[str, torch.Tensor]:
         """Return per-environment solver, preview, and predictor diagnostics."""
         return {
+            "acados_nmpc_human_motion_enabled": torch.full(
+                (self.num_envs,), float(self.cfg.human_motion.enabled), device=self.device
+            ),
+            "acados_nmpc_human_velocity_z_used": self.human_velocity_z_used,
             "acados_nmpc_state_pb": self.model_state[:, 0],
             "acados_nmpc_state_vb": self.model_state[:, 1],
             "acados_nmpc_state_theta": self.model_state[:, 2],
@@ -375,6 +406,11 @@ class AcadosNMPCPolicy(BasePolicy):
             "acados_template_distribution_version": acados_template_distribution_version(),
             "acados_build_fingerprint": controller_fingerprint(self.controller_cfg),
             "acados_build_directory": str(self.controller.build_dir),
+            "parameter_fields": list(parameter_fields(self.controller_cfg)),
+            "parameter_dimension": parameter_dimension(self.controller_cfg),
+            "human_motion_enabled": self.cfg.human_motion.enabled,
+            "human_motion_assumption": "constant_velocity" if self.cfg.human_motion.enabled else "zero_velocity",
+            "human_motion_measurement_source": 'extras["human_motion"]["velocity_z"] (current manager human_vel_z)',
             "effective_horizon": self.n_horizon,
             "reference_base_offset": self.reference_base_offset,
             "required_raw_preview_horizon": self.reference_base_offset + self.n_horizon,

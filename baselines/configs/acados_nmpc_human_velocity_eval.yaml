@@ -1,0 +1,16 @@
+# Paired comparison: same environment and tuned policy; only human modeling differs.
+env_config: environments/configs/unified_tracking_constant.yaml
+policy_config: baselines/configs/acados_nmpc_unified.yaml
+seed: 666
+policy_overrides:
+  human_motion:
+    enabled: true
+runner:
+  target_episodes: 16
+  max_steps: null
+  stop_on_target_episodes: true
+  render: false
+  save_rollout: true
+logging:
+  root_dir: logs/human_drone_collaboration/human_motion_comparison
+  run_name: human_velocity

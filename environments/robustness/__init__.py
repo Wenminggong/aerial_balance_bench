@@ -6,10 +6,16 @@ __all__ = [
     "RobustnessManager",
     "RobustnessManagerCfg",
     "VelocityResponseModel",
+    "HumanBehaviorModel",
+    "HUMAN_STEP_EXTRA_FIELDS",
 ]
 
 
 def __getattr__(name: str):
+    if name in {"HumanBehaviorModel", "HUMAN_STEP_EXTRA_FIELDS"}:
+        from .human_behavior import HUMAN_STEP_EXTRA_FIELDS, HumanBehaviorModel
+
+        return {"HumanBehaviorModel": HumanBehaviorModel, "HUMAN_STEP_EXTRA_FIELDS": HUMAN_STEP_EXTRA_FIELDS}[name]
     if name == "VelocityResponseModel":
         from .velocity_response import VelocityResponseModel
 

@@ -297,6 +297,9 @@ class VelocityModelStatePredictor:
         self.predicted_error_ddot = torch.zeros((self.num_envs, 1), device=self.device)
         self.reference_preview_used = torch.zeros((self.num_envs,), device=self.device)
         self.reference_horizon = torch.zeros((self.num_envs,), device=self.device)
+        self.human_velocity_z_used = torch.zeros(
+            (self.num_envs,), device=self.device, dtype=torch.float32
+        )
         self.read_index = 0
         if self.delay_step > 0:
             self.command_queue = torch.zeros((self.delay_step, self.num_envs, 1), device=self.device)
@@ -328,6 +331,7 @@ class VelocityModelStatePredictor:
         self.predicted_error_ddot[env_ids] = 0.0
         self.reference_preview_used[env_ids] = 0.0
         self.reference_horizon[env_ids] = 0.0
+        self.human_velocity_z_used[env_ids] = 0.0
         if self.delay_step > 0:
             self.command_queue[:, env_ids] = 0.0
 
@@ -337,14 +341,32 @@ class VelocityModelStatePredictor:
         error_prev1: torch.Tensor | None = None,
         *,
         reference_positions: torch.Tensor | None = None,
+        human_velocity_z: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Return a future 11-D observation after the configured delay horizon."""
+        """Predict through the delay, holding optional measured human velocity fixed.
+
+        ``None`` means zero human velocity on this call; no measurement is cached
+        for subsequent calls. Drone velocity/position remain absolute quantities.
+        """
         observation = observation.to(device=self.device, dtype=torch.float32)
         if observation.shape != (self.num_envs, 11):
             raise ValueError(
                 "VelocityModelStatePredictor expects observation shape "
                 f"({self.num_envs}, 11), got {tuple(observation.shape)}."
             )
+        self.human_velocity_z_used.zero_()
+        if human_velocity_z is not None:
+            if not isinstance(human_velocity_z, torch.Tensor):
+                raise TypeError("human_velocity_z must be a tensor.")
+            if human_velocity_z.shape not in ((self.num_envs,), (self.num_envs, 1)):
+                raise ValueError("human_velocity_z must have shape (num_envs,) or (num_envs, 1).")
+            human_velocity_z = human_velocity_z.to(
+                device=self.device, dtype=torch.float32
+            ).reshape(self.num_envs)
+            if not torch.all(torch.isfinite(human_velocity_z)):
+                raise ValueError("human_velocity_z must be finite.")
+            if self.active:
+                self.human_velocity_z_used.copy_(human_velocity_z)
         current_pg = observation[:, ObservationIndex.PG : ObservationIndex.PG + 1]
         current_error = (
             observation[:, ObservationIndex.PB : ObservationIndex.PB + 1]
@@ -400,6 +422,7 @@ class VelocityModelStatePredictor:
                 vrz_start,
                 vrz_half,
                 vrz,
+                self.human_velocity_z_used,
             )
             alpha = (omega - omega_prev) / self.step_dt
             arz = (vrz - vrz_prev) / self.step_dt
@@ -455,6 +478,7 @@ class VelocityModelStatePredictor:
     def get_state(self) -> dict[str, torch.Tensor]:
         """Return predictor state for rollout diagnostics."""
         state = {
+            "policy_predictor_human_velocity_z_used": self.human_velocity_z_used,
             "policy_predictor_enabled": torch.full(
                 (self.num_envs,),
                 float(self.active),
@@ -629,30 +653,34 @@ class VelocityModelStatePredictor:
         vrz_start: torch.Tensor,
         vrz_half: torch.Tensor,
         vrz_end: torch.Tensor,
+        human_velocity_z: torch.Tensor | float = 0.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.solver == "euler":
-            derivatives = self._derivatives(pb, vb, theta, vrz_start)
+            derivatives = self._derivatives(pb, vb, theta, vrz_start, human_velocity_z)
             pb_next = pb + derivatives[:, 0] * self.step_dt
             vb_next = vb + derivatives[:, 1] * self.step_dt
             theta_next = theta + derivatives[:, 2] * self.step_dt
         else:
             state = torch.stack((pb, vb, theta), dim=-1)
-            k1 = self._derivatives_from_state(state, vrz_start)
-            k2 = self._derivatives_from_state(state + 0.5 * self.step_dt * k1, vrz_half)
-            k3 = self._derivatives_from_state(state + 0.5 * self.step_dt * k2, vrz_half)
-            k4 = self._derivatives_from_state(state + self.step_dt * k3, vrz_end)
+            k1 = self._derivatives_from_state(state, vrz_start, human_velocity_z)
+            k2 = self._derivatives_from_state(state + 0.5 * self.step_dt * k1, vrz_half, human_velocity_z)
+            k3 = self._derivatives_from_state(state + 0.5 * self.step_dt * k2, vrz_half, human_velocity_z)
+            k4 = self._derivatives_from_state(state + self.step_dt * k3, vrz_end, human_velocity_z)
             next_state = state + (self.step_dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
             pb_next = next_state[:, 0]
             vb_next = next_state[:, 1]
             theta_next = next_state[:, 2]
 
-        final_derivatives = self._derivatives(pb_next, vb_next, theta_next, vrz_end)
+        final_derivatives = self._derivatives(pb_next, vb_next, theta_next, vrz_end, human_velocity_z)
         ab_next = final_derivatives[:, 1]
         omega_next = final_derivatives[:, 2]
         return pb_next, vb_next, theta_next, ab_next, omega_next
 
-    def _derivatives_from_state(self, state: torch.Tensor, vrz: torch.Tensor) -> torch.Tensor:
-        return self._derivatives(state[:, 0], state[:, 1], state[:, 2], vrz)
+    def _derivatives_from_state(
+        self, state: torch.Tensor, vrz: torch.Tensor,
+        human_velocity_z: torch.Tensor | float = 0.0,
+    ) -> torch.Tensor:
+        return self._derivatives(state[:, 0], state[:, 1], state[:, 2], vrz, human_velocity_z)
 
     def _derivatives(
         self,
@@ -660,10 +688,11 @@ class VelocityModelStatePredictor:
         vb: torch.Tensor,
         theta: torch.Tensor,
         vrz: torch.Tensor,
+        human_velocity_z: torch.Tensor | float = 0.0,
     ) -> torch.Tensor:
         beta = self._beta(theta)
         denominator = self.plank_length * self._safe_denominator(torch.cos(beta - theta))
-        omega = -vrz * torch.cos(beta) / denominator
+        omega = (human_velocity_z - vrz) * torch.cos(beta) / denominator
         ball_inertia = self.ball_inertia_ratio * self.ball_mass * self.ball_radius**2
         effective_mass = ball_inertia / self.ball_radius**2 + self.ball_mass
         ab = self.ball_mass * (

@@ -307,6 +307,13 @@ class AcadosNMPCSolverCfg:
 
 
 @dataclass
+class HumanMotionCfg:
+    """Use current measured human velocity throughout each prediction horizon."""
+
+    enabled: bool = False
+
+
+@dataclass
 class AcadosNMPCControllerCfg:
     """Fully resolved configuration consumed by the OCP controller."""
 
@@ -314,6 +321,7 @@ class AcadosNMPCControllerCfg:
     objective: AcadosNMPCObjectiveCfg = field(default_factory=AcadosNMPCObjectiveCfg)
     constraints: AcadosNMPCConstraintsCfg = field(default_factory=AcadosNMPCConstraintsCfg)
     solver: AcadosNMPCSolverCfg = field(default_factory=AcadosNMPCSolverCfg)
+    human_motion: HumanMotionCfg = field(default_factory=HumanMotionCfg)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any] | None) -> "AcadosNMPCControllerCfg":
@@ -322,6 +330,15 @@ class AcadosNMPCControllerCfg:
             return cfg
         _strict_update(cfg, data, "acados_nmpc_controller")
         return cfg
+
+
+def parameter_fields(cfg: AcadosNMPCControllerCfg) -> tuple[str, ...]:
+    """Effective stage schema; legacy PARAMETER_FIELDS and NP remain five-dimensional."""
+    return PARAMETER_FIELDS + (("human_vel_z",) if cfg.human_motion.enabled else ())
+
+
+def parameter_dimension(cfg: AcadosNMPCControllerCfg) -> int:
+    return len(parameter_fields(cfg))
 
 
 @dataclass
@@ -356,6 +373,8 @@ def _strict_update(target: Any, values: Mapping[str, Any], section: str) -> None
 
 def validate_controller_cfg(cfg: AcadosNMPCControllerCfg) -> None:
     """Validate a resolved controller config before generating solver code."""
+    if not isinstance(cfg.human_motion.enabled, bool):
+        raise ValueError("human_motion.enabled must be a boolean.")
     model = cfg.model
     positive = {
         "model.plank_length": model.plank_length,
@@ -413,6 +432,7 @@ def geometry_numpy(
     theta: np.ndarray,
     vrz: np.ndarray,
     cfg: AcadosNMPCModelCfg,
+    human_velocity_z: np.ndarray | float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(beta, omega)`` using the benchmark's protected geometry."""
     theta = np.asarray(theta, dtype=np.float64)
@@ -423,7 +443,7 @@ def geometry_numpy(
     denominator = float(cfg.plank_length) * _safe_denominator_numpy(
         np.cos(beta - theta), epsilon
     )
-    omega = -vrz * np.cos(beta) / denominator
+    omega = (np.asarray(human_velocity_z) - vrz) * np.cos(beta) / denominator
     return beta, omega
 
 
@@ -451,9 +471,10 @@ def _derivatives_numpy(
     state: np.ndarray,
     vrz: np.ndarray,
     cfg: AcadosNMPCModelCfg,
+    human_velocity_z: np.ndarray | float = 0.0,
 ) -> np.ndarray:
     pb, vb, theta = np.moveaxis(np.asarray(state, dtype=np.float64), -1, 0)
-    _, omega = geometry_numpy(theta, vrz, cfg)
+    _, omega = geometry_numpy(theta, vrz, cfg, human_velocity_z)
     inertia = float(cfg.ball_inertia_ratio) * float(cfg.ball_mass) * float(cfg.ball_radius) ** 2
     effective_mass = inertia / float(cfg.ball_radius) ** 2 + float(cfg.ball_mass)
     gamma = float(cfg.ball_mass) / effective_mass
@@ -474,34 +495,36 @@ def discrete_dynamics_numpy(
 
     ``states[..., :]`` follows :data:`STATE_FIELDS`, ``actions[..., :]`` follows
     :data:`INPUT_FIELDS`, and ``stage_parameters[..., :]`` follows
-    :data:`PARAMETER_FIELDS`.
+    the effective :func:`parameter_fields` schema.
     """
     states = np.asarray(states, dtype=np.float64)
     actions = np.asarray(actions, dtype=np.float64)
     parameters = np.asarray(stage_parameters, dtype=np.float64)
-    if states.shape[-1] != NX or actions.shape[-1] != NU or parameters.shape[-1] != NP:
+    np_dim = parameter_dimension(cfg)
+    if states.shape[-1] != NX or actions.shape[-1] != NU or parameters.shape[-1] != np_dim:
         raise ValueError(
-            f"Expected final dimensions x/u/p={NX}/{NU}/{NP}, got "
+            f"Expected final dimensions x/u/p={NX}/{NU}/{np_dim}, got "
             f"{states.shape}/{actions.shape}/{parameters.shape}."
         )
     lead_shape = np.broadcast_shapes(states.shape[:-1], actions.shape[:-1], parameters.shape[:-1])
     x = np.broadcast_to(states, (*lead_shape, NX))
     u = np.broadcast_to(actions, (*lead_shape, NU))
-    p = np.broadcast_to(parameters, (*lead_shape, NP))
+    p = np.broadcast_to(parameters, (*lead_shape, np_dim))
     pb_vb_theta = x[..., :3]
     vrz = x[..., 3]
     command_next = x[..., 4] + u[..., 0]
     tau_s, gain, bias = p[..., 2], p[..., 3], p[..., 4]
+    human_velocity_z = p[..., 5] if cfg.human_motion.enabled else 0.0
     dt = float(cfg.solver.step_dt)
     epsilon = float(cfg.model.epsilon)
 
     vrz_0 = response_profile_numpy(vrz, command_next, tau_s, gain, bias, 0.0, epsilon)
     vrz_half = response_profile_numpy(vrz, command_next, tau_s, gain, bias, 0.5 * dt, epsilon)
     vrz_end = response_profile_numpy(vrz, command_next, tau_s, gain, bias, dt, epsilon)
-    k1 = _derivatives_numpy(pb_vb_theta, vrz_0, cfg.model)
-    k2 = _derivatives_numpy(pb_vb_theta + 0.5 * dt * k1, vrz_half, cfg.model)
-    k3 = _derivatives_numpy(pb_vb_theta + 0.5 * dt * k2, vrz_half, cfg.model)
-    k4 = _derivatives_numpy(pb_vb_theta + dt * k3, vrz_end, cfg.model)
+    k1 = _derivatives_numpy(pb_vb_theta, vrz_0, cfg.model, human_velocity_z)
+    k2 = _derivatives_numpy(pb_vb_theta + 0.5 * dt * k1, vrz_half, cfg.model, human_velocity_z)
+    k3 = _derivatives_numpy(pb_vb_theta + 0.5 * dt * k2, vrz_half, cfg.model, human_velocity_z)
+    k4 = _derivatives_numpy(pb_vb_theta + dt * k3, vrz_end, cfg.model, human_velocity_z)
     physical_next = pb_vb_theta + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     return np.concatenate(
         (physical_next, vrz_end[..., None], command_next[..., None]), axis=-1
@@ -511,11 +534,12 @@ def discrete_dynamics_numpy(
 def controller_fingerprint(cfg: AcadosNMPCControllerCfg) -> str:
     """Return the deterministic generated-code cache key."""
     payload = {
-        "schema": 2,
+        "schema": 3,
         "acados_supported_version": ACADOS_SUPPORTED_VERSION,
         "acados_source_version": installed_acados_version(),
         "acados_source_revision": acados_source_revision(),
-        "dimensions": {"nx": NX, "nu": NU, "np": NP, "ny": NY, "ny_e": NY_E, "nh": NH},
+        "dimensions": {"nx": NX, "nu": NU, "np": parameter_dimension(cfg), "ny": NY, "ny_e": NY_E, "nh": NH},
+        "parameter_fields": parameter_fields(cfg),
         "controller": asdict(cfg),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -527,7 +551,9 @@ def _safe_denominator_casadi(value: Any, epsilon: float) -> Any:
     return ca.if_else(ca.fabs(value) < epsilon, sign * epsilon, value)
 
 
-def _geometry_casadi(theta: Any, vrz: Any, cfg: AcadosNMPCModelCfg) -> tuple[Any, Any]:
+def _geometry_casadi(
+    theta: Any, vrz: Any, cfg: AcadosNMPCModelCfg, human_velocity_z: Any = 0.0
+) -> tuple[Any, Any]:
     epsilon = float(cfg.epsilon)
     sin_beta = (float(cfg.plank_length) / float(cfg.rope_length)) * (1.0 - ca.cos(theta))
     sin_beta = ca.fmin(ca.fmax(sin_beta, -1.0 + epsilon), 1.0 - epsilon)
@@ -535,7 +561,7 @@ def _geometry_casadi(theta: Any, vrz: Any, cfg: AcadosNMPCModelCfg) -> tuple[Any
     denominator = float(cfg.plank_length) * _safe_denominator_casadi(
         ca.cos(beta - theta), epsilon
     )
-    return beta, -vrz * ca.cos(beta) / denominator
+    return beta, (human_velocity_z - vrz) * ca.cos(beta) / denominator
 
 
 def _response_casadi(vrz: Any, command_next: Any, tau_s: Any, gain: Any, bias: Any, elapsed: float, epsilon: float) -> Any:
@@ -545,9 +571,11 @@ def _response_casadi(vrz: Any, command_next: Any, tau_s: Any, gain: Any, bias: A
     return ca.if_else(tau_s <= epsilon, target, dynamic)
 
 
-def _derivatives_casadi(state: Any, vrz: Any, cfg: AcadosNMPCModelCfg) -> Any:
+def _derivatives_casadi(
+    state: Any, vrz: Any, cfg: AcadosNMPCModelCfg, human_velocity_z: Any = 0.0
+) -> Any:
     pb, vb, theta = state[0], state[1], state[2]
-    _, omega = _geometry_casadi(theta, vrz, cfg)
+    _, omega = _geometry_casadi(theta, vrz, cfg, human_velocity_z)
     inertia = float(cfg.ball_inertia_ratio) * float(cfg.ball_mass) * float(cfg.ball_radius) ** 2
     effective_mass = inertia / float(cfg.ball_radius) ** 2 + float(cfg.ball_mass)
     gamma = float(cfg.ball_mass) / effective_mass
@@ -564,8 +592,9 @@ def build_acados_ocp(cfg: AcadosNMPCControllerCfg, model_name: str) -> Any:
     validate_controller_cfg(cfg)
     x = ca.SX.sym("x", NX)
     u = ca.SX.sym("u", NU)
-    p = ca.SX.sym("p", NP)
+    p = ca.SX.sym("p", parameter_dimension(cfg))
     pg, vg, tau_s, gain, bias = (p[index] for index in range(NP))
+    human_velocity_z = p[5] if cfg.human_motion.enabled else 0.0
     command_next = x[4] + u[0]
     dt = float(cfg.solver.step_dt)
     epsilon = float(cfg.model.epsilon)
@@ -574,14 +603,14 @@ def build_acados_ocp(cfg: AcadosNMPCControllerCfg, model_name: str) -> Any:
     vrz_half = _response_casadi(x[3], command_next, tau_s, gain, bias, 0.5 * dt, epsilon)
     vrz_end = _response_casadi(x[3], command_next, tau_s, gain, bias, dt, epsilon)
     physical = x[:3]
-    k1 = _derivatives_casadi(physical, vrz_0, cfg.model)
-    k2 = _derivatives_casadi(physical + 0.5 * dt * k1, vrz_half, cfg.model)
-    k3 = _derivatives_casadi(physical + 0.5 * dt * k2, vrz_half, cfg.model)
-    k4 = _derivatives_casadi(physical + dt * k3, vrz_end, cfg.model)
+    k1 = _derivatives_casadi(physical, vrz_0, cfg.model, human_velocity_z)
+    k2 = _derivatives_casadi(physical + 0.5 * dt * k1, vrz_half, cfg.model, human_velocity_z)
+    k3 = _derivatives_casadi(physical + 0.5 * dt * k2, vrz_half, cfg.model, human_velocity_z)
+    k4 = _derivatives_casadi(physical + dt * k3, vrz_end, cfg.model, human_velocity_z)
     physical_next = physical + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
     x_next = ca.vertcat(physical_next, vrz_end, command_next)
 
-    _, omega = _geometry_casadi(x[2], x[3], cfg.model)
+    _, omega = _geometry_casadi(x[2], x[3], cfg.model, human_velocity_z)
     stage_y = ca.vertcat(x[0] - pg, x[1] - vg, x[2], omega, x[3], command_next, u[0])
     terminal_y = ca.vertcat(x[0] - pg, x[1] - vg, x[2], omega, x[3], x[4])
     soft_h = ca.vertcat(x[0], x[2], x[0] - pg)
@@ -671,7 +700,9 @@ def build_acados_ocp(cfg: AcadosNMPCControllerCfg, model_name: str) -> Any:
         ocp.constraints.lbx_e = velocity_min
         ocp.constraints.ubx_e = velocity_max
 
-    ocp.parameter_values = np.array([0.35, 0.0, 0.155, 0.86, -0.0035])
+    ocp.parameter_values = np.array(
+        [0.35, 0.0, 0.155, 0.86, -0.0035] + ([0.0] if cfg.human_motion.enabled else [])
+    )
     return ocp
 
 
@@ -774,7 +805,7 @@ class AcadosNMPCController:
         """Set all environments, perform one single/batch solve, and validate output."""
         initial_states = np.asarray(initial_states, dtype=np.float64)
         parameters = np.asarray(stage_parameters, dtype=np.float64)
-        expected_p_shape = (self.num_envs, self.n_horizon + 1, NP)
+        expected_p_shape = (self.num_envs, self.n_horizon + 1, parameter_dimension(self.cfg))
         if initial_states.shape != (self.num_envs, NX):
             raise ValueError(
                 f"initial_states must have shape ({self.num_envs}, {NX}), got {initial_states.shape}."

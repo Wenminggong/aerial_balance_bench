@@ -118,10 +118,12 @@ from aerial_balance_bench.baselines.velocity_response_adaptation import (
     validate_velocity_response_adaptation_environment,
 )
 from aerial_balance_bench.environments.aerial_balance_env import AerialBalanceEnv, AerialBalanceEnvCfg
+from aerial_balance_bench.environments.robustness.human_behavior import HUMAN_STEP_EXTRA_FIELDS
 from aerial_balance_bench.utils.io import append_csv_row, ensure_dir, save_yaml
 
 
 STEP_EXTRA_FIELDS = (
+    *HUMAN_STEP_EXTRA_FIELDS,
     "pb",
     "pg",
     "vg",

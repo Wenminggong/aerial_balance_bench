@@ -1,4 +1,7 @@
 acados_nmpc_policy:
+  # Share the current measured human velocity across predictor and OCP horizons.
+  human_motion:
+    enabled: false
   name: acados_unified_nmpc
   build_root: build/acados_unified_nmpc
 
@@ -50,7 +53,7 @@ acados_nmpc_policy:
 
   state_predictor:
     enabled: true
-    delay_step: 8
+    delay_step: 4
     solver: rk4
     step_dt: auto
     max_acc: auto

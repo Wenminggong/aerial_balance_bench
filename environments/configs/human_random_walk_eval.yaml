@@ -1,0 +1,39 @@
+# Short human-endpoint smoke run; usable by zero-action or as CPID --env_config.
+task_name: target_position
+interface_name: velocity
+env:
+  seed: 2025
+  num_envs: 2
+  episode_length_s: 2.0
+  device: cuda:0
+target_position_task:
+  random_goal: false
+  fixed_goal_position: 0.35
+  ball_position_min: 0.25
+  ball_position_max: 0.45
+  min_initial_goal_distance: 0.05
+velocity_interface:
+  max_acc: 0.5
+  max_velocity: 0.0
+robustness:
+  enabled: true
+  external_disturbance_enabled: true
+  human_behavior_type: random-walk
+  human_ou_enabled: true
+  human_vel_max_acc: 0.5
+  human_pos_feedback_sample: true
+  external_disturbance_ou_mu: 0.0
+  external_disturbance_ou_theta_range: [0.1, 0.3]
+  external_disturbance_ou_sigma_range: [0.01, 0.05]
+  external_disturbance_ou_clip: 0.05
+target_position_evaluator:
+  episode_length_s: 2.0
+  num_eval_episodes: 2
+runner:
+  target_episodes: 2
+  max_steps: 121
+  render: false
+  save_rollout: true
+logging:
+  root_dir: logs/human_behavior
+  run_name: human_random_walk

@@ -206,7 +206,17 @@ Robustness settings are configured under `robustness` in the environment YAML fi
 | Low-level gain variation | `controller_gain_variation_enabled`, `controller_gain_range` | Tests sensitivity to imperfect command tracking by the drone controller. |
 | Action delay | `action_delay_enabled`, `delay_step`, `delay_step_choices` | Inserts a fixed or reset-time randomized command delay between high-level output and executed command. |
 | Velocity response | `velocity_response_enabled`, target ranges, sim scalars, and noise parameters | Uses a feed-forward lead-lag command so the existing velocity loop approximates a configured final first-order response; supports no noise, Gaussian noise, or OU noise. |
-| External disturbance | `external_disturbance_enabled`, OU process parameters | Applies temporally correlated vertical motion at the otherwise fixed beam endpoint. |
+| Human endpoint motion | `external_disturbance_enabled`, `human_behavior_type`, human/OU parameters | Cooperative CPID, random-walk, or disturbed vertical hand motion with recentering and acceleration limits. |
+
+The [human behavior model](docs/human_behavior_model.md) replaces the historical
+pure OU endpoint disturbance. Existing YAML remains loadable and defaults to
+`random-walk`, but active-disturbance trajectories now follow the new protocol.
+All three human modes use `external_disturbance_ou_theta_range`,
+`external_disturbance_ou_sigma_range`, `external_disturbance_ou_mu`, and
+`external_disturbance_ou_clip`; the former disturbed-only scalar inputs are deprecated
+and ignored.
+Measured hand velocity and behavior diagnostics are available in step extras and
+evaluation rollouts without changing the policy observation or benchmark metrics.
 
 An empty `delay_step_choices` keeps the legacy fixed `delay_step` behavior. A
 non-empty list takes precedence and samples one delay uniformly and independently
@@ -435,6 +445,11 @@ The NMPC core itself is delay-free. The second command uses the existing
 rebases references from `D ... D+N`. Full formulation, field ordering,
 fallback behavior, generated-code caching, and timing acceptance criteria are
 documented in [acados Unified-NMPC](docs/acados_unified_nmpc.md).
+
+An optional `acados_nmpc_policy.human_motion.enabled` switch shares the current
+measured human endpoint velocity between the delay predictor and every NMPC
+stage. It defaults to `false` (reactive baseline); see the
+[human velocity model and paired evaluation commands](docs/acados_unified_nmpc.md#15-实测人速度的常值预测控制).
 
 The acados objective weights can be tuned sequentially with one rollout per
 invocation. The workflow fixes the mixed environment and `N=30`, records a

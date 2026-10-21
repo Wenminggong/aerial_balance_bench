@@ -41,6 +41,8 @@ robustness:
   velocity_response_noise_clip: 0.0
   velocity_response_max_abs_velocity: 0.0
   external_disturbance_enabled: true
+  # Unified human model: OU drift + recentering + acceleration-limited motion.
+  human_behavior_type: random-walk
   external_disturbance_ou_mu: 0.0
   external_disturbance_ou_theta_range: [0.1, 0.3]
   external_disturbance_ou_sigma_range: [0.01, 0.05]
